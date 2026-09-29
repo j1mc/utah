@@ -209,6 +209,31 @@ class CleanStageTests(unittest.TestCase):
                 f"{path} was not pinned to SOURCE_DATE_EPOCH",
             )
 
+    def test_rewritten_directories_are_pinned_too(self):
+        """The directories clean-stage itself rewrites must be pinned as well.
+
+        Removing an entry from /var, /var/cache, /run, /tmp or / stamps the wall
+        clock on that directory. /var/cache is a parent of the surviving
+        /var/cache/rpm-ostree, so a chunkah layer carries those entries and its
+        digest would vary per rebuild even though nothing changed (utah#313).
+        """
+        self.assertCleanSucceeded()
+        for path in (
+            self.root,
+            self.root / "var",
+            self.root / "var/cache",
+            self.root / "var/cache/rpm-ostree",
+            self.root / "var/cache/rpm-ostree/repomd.xml",
+            self.root / "run",
+            self.root / "tmp",
+        ):
+            mtime = int(os.lstat(path).st_mtime)
+            self.assertEqual(
+                mtime,
+                SOURCE_DATE_EPOCH,
+                f"{path} was not pinned to SOURCE_DATE_EPOCH",
+            )
+
     def test_transaction_history_is_dropped(self):
         """dnf5 records every transaction in usr/lib/sysimage/libdnf5/
         transaction_history.sqlite (with its -shm and -wal companions). It is

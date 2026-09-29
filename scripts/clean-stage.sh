@@ -1,5 +1,13 @@
 #!/usr/bin/bash
-# Strip build-time residue that `bootc container lint --fatal-warnings` rejects.
+# Strip build-time residue that `bootc container lint --fatal-warnings` rejects,
+# then make what survives reproducible.
+#
+# Two jobs, in that order. The first is the lint sweep described below. The
+# second (utah#313) drops the dnf5 transaction history and pins every mtime the
+# image still carries to a fixed SOURCE_DATE_EPOCH, so a rebuild that changes
+# nothing produces identical layer digests. Both belong here because this is the
+# final layer: chunkah reads the merged rootfs, so a write here is the last one
+# and wins over the wall-clock mtimes the package and extension steps left.
 #
 # This mirrors the filesystem portion of Bluefin's
 # build_files/shared/clean-stage.sh, deliberately: Utah keeps Bluefin's package
@@ -84,8 +92,21 @@ done
 # which under `set -e` kills the whole build layer. -h stamps the link itself,
 # which is also the mtime that lands in the tar header, so it is the correct
 # target here and not merely a way to dodge the error.
+#
+# The sweep has to cover the directories this script rewrites, not only /usr and
+# /etc. Removing an entry from /var, /var/cache, /run, /tmp and / updates that
+# directory's own mtime to the wall clock, and /var/cache is a parent of the
+# surviving /var/cache/rpm-ostree, so a chunkah layer carries those entries and
+# its digest would still vary per rebuild. Pin them too, after the removals
+# above, which is why this block is last in the script.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1704067200}"
-for base in usr etc; do
+for base in usr etc var; do
     [ -d "${CLEAN_ROOT:?}/${base}" ] || continue
     find "${CLEAN_ROOT}/${base}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+done
+# The root itself plus the two directories cleared in place. They are pinned
+# non-recursively because clear_dir already left them empty.
+for dir in "" /run /tmp; do
+    [ -d "${CLEAN_ROOT:?}${dir}" ] || continue
+    touch -h -d "@${SOURCE_DATE_EPOCH}" "${CLEAN_ROOT}${dir}"
 done

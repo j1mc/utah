@@ -173,7 +173,11 @@ it carries a wall-clock mtime that churns its layer on every rebuild. It then
 pins every file and directory under `/usr` and `/etc` to a fixed
 `SOURCE_DATE_EPOCH` (2024-01-01T00:00:00Z): chunkah splits those directories
 across layers, so any wall-clock mtime in a tar header changes that layer's
-digest. A rebuild that changes nothing must produce an identical image
+digest. The pin also covers the directories the script rewrites itself -- `/`,
+`/var` (recursively, so the surviving `/var/cache/rpm-ostree` is included),
+`/run` and `/tmp` -- because removing an entry stamps the wall clock on the
+parent directory, and those entries ship in a layer too. A rebuild that changes
+nothing must produce an identical image
 (utah#313). This normalization lands in `utah-clean-stage`, the final layer,
 because chunkah reads the merged rootfs -- a touch there is the last write, so
 it wins over the wall-clock mtimes the package and extension steps left. The
