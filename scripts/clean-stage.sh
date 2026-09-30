@@ -110,3 +110,37 @@ for dir in "" /run /tmp; do
     [ -d "${CLEAN_ROOT:?}${dir}" ] || continue
     touch -h -d "@${SOURCE_DATE_EPOCH}" "${CLEAN_ROOT}${dir}"
 done
+
+# Pinning /usr invalidates every system fontconfig cache, so rebuild them here.
+# fontconfig only accepts a cache in /usr/lib/fontconfig/cache whose stored
+# checksum equals the font directory's current mtime exactly
+# (FcDirCacheValidateHelper in fccache.c). Fedora's fontconfig package rebuilds
+# those caches from a %transfiletriggerin that runs `fc-cache -s` inside the dnf
+# transaction that installs Utah's fonts, so the checksums it stores are the
+# wall-clock mtimes dnf just wrote. The pin loop above then re-stamps every
+# /usr/share/fonts directory to SOURCE_DATE_EPOCH, which leaves every one of
+# those caches stale: nothing else in the image re-runs fc-cache, so at runtime
+# each fontconfig client rescans the whole font tree into ~/.cache/fontconfig --
+# on every start, for any account whose home is not writable.
+#
+# So re-run it after the pin, when the directory mtimes are already final, and
+# export SOURCE_DATE_EPOCH: fontconfig clamps both the checksum and its nanosecond
+# field to that value, so the cache files are byte-identical across rebuilds.
+# --sysroot keeps the rebuild inside CLEAN_ROOT, which is what makes this safe to
+# exercise against a scratch tree instead of the live filesystem.
+#
+# fc-cache writes those files now, with the wall clock, so re-pin the cache
+# directories afterwards or this reintroduces the churn the pin removed.
+if command -v fc-cache >/dev/null 2>&1; then
+    SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+        fc-cache --sysroot="${CLEAN_ROOT:?}" --force --system-only
+    for cache in /usr/lib/fontconfig/cache /var/cache/fontconfig; do
+        [ -d "${CLEAN_ROOT:?}${cache}" ] || continue
+        find "${CLEAN_ROOT}${cache}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    done
+else
+    # Not reachable in the image build -- fontconfig is a dependency of the
+    # desktop -- but the script is also run against scratch trees that have no
+    # font tooling at all, and a missing fc-cache there is not a failure.
+    echo "clean-stage: fc-cache not found, skipping font cache rebuild" >&2
+fi

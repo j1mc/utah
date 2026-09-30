@@ -61,16 +61,20 @@ def build_tree(root: Path) -> None:
     # deliberately far in the future, plus the dnf5 transaction history the
     # script must drop. The mtime test asserts clean-stage pins the former to
     # SOURCE_DATE_EPOCH and removes the latter (utah#313).
-    for directory in ("usr/bin", "usr/share/doc", "etc/systemd/system"):
+    for directory in ("usr/bin", "usr/share/doc", "etc/systemd/system",
+                      "usr/share/fonts/utah"):
         (root / directory).mkdir(parents=True)
     (root / "usr/bin/tool").write_text("binary\n")
     (root / "usr/share/doc/readme").write_text("doc\n")
     (root / "etc/systemd/system/foo.service").write_text("[Unit]\n")
+    (root / "usr/share/fonts/utah/Utah.ttf").write_bytes(b"ttf\n")
     # Year 2036 -- well after the epoch the script pins to -- so a failure to
     # normalise is unmistakable rather than a coincidence with the target.
     future = 2085840000
     for path in (root / "usr/bin/tool", root / "usr/share/doc/readme",
-                 root / "etc/systemd/system/foo.service"):
+                 root / "etc/systemd/system/foo.service",
+                 root / "usr/share/fonts/utah/Utah.ttf",
+                 root / "usr/share/fonts/utah"):
         os.utime(path, (future, future))
     # dnf5's per-transaction SQLite database under the sysroot.
     txn = root / "usr/lib/sysimage/libdnf5"
@@ -88,14 +92,56 @@ def build_tree(root: Path) -> None:
     (root / "usr/lib/bootc/storage").symlink_to("/sysroot/ostree/bootc/storage")
 
 
-def clean(root: Path) -> subprocess.CompletedProcess:
-    """Run the real script with CLEAN_ROOT pointed at `root`."""
+def clean(root: Path, stub_bin: Path | None = None) -> subprocess.CompletedProcess:
+    """Run the real script with CLEAN_ROOT pointed at `root`.
+
+    `stub_bin`, when given, is prepended to PATH so the run can supply a fake
+    fc-cache. The build hosts these tests run on have no fontconfig at all, and
+    even where they do, the real binary must never be pointed at the live
+    filesystem from a unit test.
+    """
+    path = "/usr/bin:/bin"
+    if stub_bin is not None:
+        path = f"{stub_bin}:{path}"
     return subprocess.run(
         ["bash", str(SCRIPT)],
-        env={"PATH": "/usr/bin:/bin", "CLEAN_ROOT": str(root)},
+        env={"PATH": path, "CLEAN_ROOT": str(root)},
         capture_output=True,
         text=True,
     )
+
+
+FC_CACHE_STUB = """#!/usr/bin/bash
+# Stand-in for fontconfig's fc-cache. Records how clean-stage called it and the
+# state of the tree at that moment, then writes a cache file the way the real
+# one does: with the current wall clock, which is what clean-stage must re-pin.
+set -eu
+sysroot=""
+for arg in "$@"; do
+    case "$arg" in
+        --sysroot=*) sysroot="${arg#--sysroot=}" ;;
+    esac
+done
+{
+    echo "argv=$*"
+    echo "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH-unset}"
+    echo "fontdir_mtime=$(stat -c %Y "${sysroot}/usr/share/fonts/utah")"
+} > "$RECORD"
+cache="${sysroot}/usr/lib/fontconfig/cache"
+mkdir -p "$cache"
+echo "cache" > "${cache}/deadbeef-le64.cache-9"
+touch -d "@2085840000" "${cache}/deadbeef-le64.cache-9" "$cache"
+"""
+
+
+def fc_cache_stub(directory: Path, record: Path) -> Path:
+    """Install the stub in `directory` and return the bin dir to put on PATH."""
+    bin_dir = directory / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "fc-cache"
+    stub.write_text(FC_CACHE_STUB.replace("$RECORD", str(record)))
+    stub.chmod(0o755)
+    return bin_dir
 
 
 class CleanStageTests(unittest.TestCase):
@@ -284,6 +330,94 @@ class CleanStageTests(unittest.TestCase):
                 subprocess.run(["rm", "-rf", str(root / directory)], check=True)
             result = clean(root)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_fc_cache_is_not_an_error(self):
+        """The scratch trees these tests build carry no font tooling, and the
+        build hosts have no fontconfig either. A missing fc-cache must not fail
+        the layer -- the setUp run above has no stub on PATH."""
+        self.assertCleanSucceeded()
+
+
+class FontCacheTests(unittest.TestCase):
+    """Pinning /usr invalidates every system font cache, so clean-stage rebuilds.
+
+    fontconfig accepts a cache under /usr/lib/fontconfig/cache only when the
+    checksum stored in it equals the font directory's current mtime exactly
+    (FcDirCacheValidateHelper in fccache.c). Fedora's fontconfig rebuilds those
+    caches from a %transfiletriggerin -- `fc-cache -s`, inside the dnf
+    transaction that installs Utah's fonts -- so they record the wall-clock
+    mtimes dnf wrote. clean-stage then re-stamps /usr/share/fonts to
+    SOURCE_DATE_EPOCH, and unless it rebuilds the caches afterwards every one of
+    them is stale in the shipped image: each fontconfig client rescans the font
+    tree on every start for any account whose home is not writable.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        build_tree(self.root)
+        harness = tempfile.TemporaryDirectory()
+        self.addCleanup(harness.cleanup)
+        self.record = Path(harness.name) / "fc-cache.record"
+        bin_dir = fc_cache_stub(Path(harness.name), self.record)
+        self.result = clean(self.root, stub_bin=bin_dir)
+        self.assertEqual(
+            self.result.returncode, 0,
+            f"clean-stage.sh failed:\n{self.result.stderr}")
+
+    def recorded(self) -> dict:
+        self.assertTrue(
+            self.record.exists(),
+            "clean-stage never invoked fc-cache, so every system font cache "
+            "still records a pre-pin mtime and is stale at runtime",
+        )
+        return dict(
+            line.split("=", 1)
+            for line in self.record.read_text().splitlines()
+        )
+
+    def test_font_caches_are_rebuilt_forcibly_and_system_wide(self):
+        """-f is required because the stale caches are still present and
+        fontconfig would otherwise keep them; -s writes the system cache
+        directory rather than a per-user one; --sysroot confines the rebuild to
+        the tree being cleaned."""
+        argv = self.recorded()["argv"]
+        self.assertIn(f"--sysroot={self.root}", argv)
+        self.assertIn("--force", argv)
+        self.assertIn("--system-only", argv)
+
+    def test_rebuild_runs_after_the_mtime_pin(self):
+        """Order is the whole point: fontconfig stores the directory mtime it
+        sees as the cache's checksum, so the rebuild has to happen once
+        /usr/share/fonts already carries its final, pinned mtime. Run it before
+        the pin and the cache is stale the moment the pin lands."""
+        self.assertEqual(
+            self.recorded()["fontdir_mtime"],
+            str(SOURCE_DATE_EPOCH),
+            "fc-cache ran before the pin loop, so it stored a pre-pin checksum",
+        )
+
+    def test_rebuild_is_deterministic(self):
+        """fontconfig honours SOURCE_DATE_EPOCH in both the checksum and the
+        nanosecond field it writes, so exporting it is what keeps the cache
+        files byte-identical between two builds of the same content."""
+        self.assertEqual(
+            self.recorded()["SOURCE_DATE_EPOCH"],
+            str(SOURCE_DATE_EPOCH),
+            "fc-cache ran without SOURCE_DATE_EPOCH exported",
+        )
+
+    def test_rebuilt_caches_are_pinned(self):
+        """fc-cache writes with the wall clock, so leaving its output unpinned
+        would hand back the churn the pin loop exists to remove."""
+        cache = self.root / "usr/lib/fontconfig/cache"
+        for path in (cache, cache / "deadbeef-le64.cache-9"):
+            self.assertEqual(
+                int(os.lstat(path).st_mtime),
+                SOURCE_DATE_EPOCH,
+                f"{path} was not pinned to SOURCE_DATE_EPOCH",
+            )
 
 
 if __name__ == "__main__":

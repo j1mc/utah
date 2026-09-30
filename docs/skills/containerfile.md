@@ -186,6 +186,15 @@ image (`/usr/lib/bootc/storage`, the malcontent `COPYING` links, the 32-bit
 `libstdc++.a` stubs), and a dereferencing `touch` exits non-zero on each one
 and fails the layer under `set -e`. `-h` stamps the link itself, which is the
 mtime the tar header carries anyway.
+Pinning `/usr` invalidates every system font cache, so the pin loop is followed
+by `fc-cache --sysroot="$CLEAN_ROOT" --force --system-only` with
+`SOURCE_DATE_EPOCH` exported. fontconfig accepts a cache under
+`/usr/lib/fontconfig/cache` only when its stored checksum equals the font
+directory's current mtime, and Fedora's `%transfiletriggerin` built those caches
+from the wall-clock mtimes dnf wrote; without the rebuild every client rescans
+the font tree at runtime. It must run after the pin, so the checksum records the
+final mtime, and its own output must then be re-pinned -- `fc-cache` writes with
+the wall clock.
 The same principle applies at the source: `build-gnome-extensions.sh` removes
 GSConnect's `_build/` after `meson install`, exactly as it already removes
 Blur My Shell's `build/`, so the timestamped artifact never reaches the image
