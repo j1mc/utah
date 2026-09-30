@@ -194,7 +194,12 @@ directory's current mtime, and Fedora's `%transfiletriggerin` built those caches
 from the wall-clock mtimes dnf wrote; without the rebuild every client rescans
 the font tree at runtime. It must run after the pin, so the checksum records the
 final mtime, and its own output must then be re-pinned -- `fc-cache` writes with
-the wall clock.
+the wall clock. Re-pinning the cache alone is not enough: the rebuild also
+stamps every directory above it, so the pin walks each cache path back up to the
+root. And because fontconfig writes to the first writable entry in its cachedir
+list -- `/usr/lib/fontconfig/cache` on the Fedora base, but `/var/cache/
+fontconfig` in the stock upstream order -- the `/var/cache` sweep that leaves
+bootc only `rpm-ostree` runs a second time after the rebuild.
 The same principle applies at the source: `build-gnome-extensions.sh` removes
 GSConnect's `_build/` after `meson install`, exactly as it already removes
 Blur My Shell's `build/`, so the timestamped artifact never reaches the image

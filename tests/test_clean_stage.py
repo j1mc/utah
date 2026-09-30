@@ -19,6 +19,7 @@ assert on the tree that survives.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -92,23 +93,44 @@ def build_tree(root: Path) -> None:
     (root / "usr/lib/bootc/storage").symlink_to("/sysroot/ostree/bootc/storage")
 
 
-def clean(root: Path, stub_bin: Path | None = None) -> subprocess.CompletedProcess:
+def clean(root: Path, stub_bin: Path | None = None,
+          inherit_path: bool = True) -> subprocess.CompletedProcess:
     """Run the real script with CLEAN_ROOT pointed at `root`.
 
     `stub_bin`, when given, is prepended to PATH so the run can supply a fake
-    fc-cache. The build hosts these tests run on have no fontconfig at all, and
-    even where they do, the real binary must never be pointed at the live
-    filesystem from a unit test.
+    fc-cache. `inherit_path=False` drops the host's own directories entirely,
+    which is the only way to exercise the branch taken when fontconfig is not
+    installed: a CI runner that has it would otherwise hand the script a real
+    fc-cache, and the real binary must never be pointed at a scratch tree.
     """
-    path = "/usr/bin:/bin"
+    path = "/usr/bin:/bin" if inherit_path else ""
     if stub_bin is not None:
-        path = f"{stub_bin}:{path}"
+        path = f"{stub_bin}:{path}" if path else str(stub_bin)
     return subprocess.run(
         ["bash", str(SCRIPT)],
         env={"PATH": path, "CLEAN_ROOT": str(root)},
         capture_output=True,
         text=True,
     )
+
+
+# The external commands clean-stage.sh calls. Everything else it uses is a bash
+# builtin, so a PATH holding just these runs the script with no fc-cache in
+# sight and nothing else of the host's either.
+SCRIPT_COMMANDS = ("bash", "find", "rm", "touch")
+
+
+def shadow_bin(directory: Path) -> Path:
+    """A bin dir with the script's tools and deliberately no fc-cache."""
+    bin_dir = directory / "shadow-bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name in SCRIPT_COMMANDS:
+        resolved = shutil.which(name)
+        assert resolved is not None, f"{name} is required to run clean-stage.sh"
+        target = bin_dir / name
+        if not target.exists():
+            target.symlink_to(resolved)
+    return bin_dir
 
 
 FC_CACHE_STUB = """#!/usr/bin/bash
@@ -134,6 +156,30 @@ touch -d "@2085840000" "${cache}/deadbeef-le64.cache-9" "$cache"
 """
 
 
+def clean_without_fontconfig(root: Path) -> subprocess.CompletedProcess:
+    """Run the script on a PATH that holds its tools and no fc-cache at all."""
+    with tempfile.TemporaryDirectory() as harness:
+        return clean(root, stub_bin=shadow_bin(Path(harness)), inherit_path=False)
+
+
+VAR_CACHE_FC_STUB = """#!/usr/bin/bash
+# A fontconfig whose cachedir list starts with /var/cache/fontconfig, which is
+# the stock upstream order. clean-stage must sweep what this leaves behind and
+# re-pin the directories writing it stamped.
+set -eu
+sysroot=""
+for arg in "$@"; do
+    case "$arg" in
+        --sysroot=*) sysroot="${arg#--sysroot=}" ;;
+    esac
+done
+cache="${sysroot}/var/cache/fontconfig"
+mkdir -p "$cache"
+echo "cache" > "${cache}/deadbeef-le64.cache-9"
+touch -d "@2085840000" "${cache}/deadbeef-le64.cache-9" "$cache"
+"""
+
+
 def fc_cache_stub(directory: Path, record: Path) -> Path:
     """Install the stub in `directory` and return the bin dir to put on PATH."""
     bin_dir = directory / "bin"
@@ -150,7 +196,14 @@ class CleanStageTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         build_tree(self.root)
-        self.result = clean(self.root)
+        # No fc-cache on PATH, and no host directories either: the font-cache
+        # branch has its own tests with a stub, and a CI runner that happens to
+        # have fontconfig installed must not end up running the real binary
+        # against this scratch tree.
+        harness = tempfile.TemporaryDirectory()
+        self.addCleanup(harness.cleanup)
+        self.result = clean(
+            self.root, stub_bin=shadow_bin(Path(harness.name)), inherit_path=False)
 
     def assertCleanSucceeded(self):
         self.assertEqual(
@@ -213,7 +266,7 @@ class CleanStageTests(unittest.TestCase):
             build_tree(root)
             for directory in ("run", "tmp", "utah-cache"):
                 subprocess.run(["rm", "-rf", str(root / directory)], check=True)
-            result = clean(root)
+            result = clean_without_fontconfig(root)
             self.assertEqual(
                 result.returncode, 0,
                 f"clean-stage.sh must tolerate absent /run, /tmp and /utah-cache:\n"
@@ -230,7 +283,7 @@ class CleanStageTests(unittest.TestCase):
             root = Path(tmp)
             build_tree(root)
             (root / "var/marker").write_text("plain file\n")
-            result = clean(root)
+            result = clean_without_fontconfig(root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((root / "var/marker").is_file())
 
@@ -328,14 +381,19 @@ class CleanStageTests(unittest.TestCase):
             build_tree(root)
             for directory in ("usr", "etc"):
                 subprocess.run(["rm", "-rf", str(root / directory)], check=True)
-            result = clean(root)
+            result = clean_without_fontconfig(root)
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_missing_fc_cache_is_not_an_error(self):
-        """The scratch trees these tests build carry no font tooling, and the
-        build hosts have no fontconfig either. A missing fc-cache must not fail
-        the layer -- the setUp run above has no stub on PATH."""
+        """A host without fontconfig must still produce a clean layer.
+
+        The setUp run is already such a host -- its PATH carries the script's
+        own tools and nothing else -- so this asserts on what that run said and
+        left behind: the skip is announced, and no cache tree is invented.
+        """
         self.assertCleanSucceeded()
+        self.assertIn("fc-cache not found", self.result.stderr)
+        self.assertFalse((self.root / "usr/lib/fontconfig").exists())
 
 
 class FontCacheTests(unittest.TestCase):
@@ -417,6 +475,91 @@ class FontCacheTests(unittest.TestCase):
                 int(os.lstat(path).st_mtime),
                 SOURCE_DATE_EPOCH,
                 f"{path} was not pinned to SOURCE_DATE_EPOCH",
+            )
+
+
+class VarCacheFontCacheTests(unittest.TestCase):
+    """fontconfig's stock cachedir order puts /var/cache/fontconfig first.
+
+    The Fedora base this image is built from lists /usr/lib/fontconfig/cache
+    instead, but the script also runs on hosts carrying the upstream order, and
+    there the rebuild deposits a fresh directory under /var/cache -- after the
+    sweep that leaves bootc only the rpm-ostree cache it expects, and after the
+    pin loop. Both have to be applied again or the layer ships a directory
+    `bootc container lint` rejects, carrying a wall-clock mtime.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "root"
+        self.root.mkdir()
+        build_tree(self.root)
+        harness = tempfile.TemporaryDirectory()
+        self.addCleanup(harness.cleanup)
+        bin_dir = Path(harness.name) / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "fc-cache"
+        stub.write_text(VAR_CACHE_FC_STUB)
+        stub.chmod(0o755)
+        self.result = clean(self.root, stub_bin=bin_dir)
+        self.assertEqual(
+            self.result.returncode, 0,
+            f"clean-stage.sh failed:\n{self.result.stderr}")
+
+    def test_var_cache_still_keeps_only_rpm_ostree(self):
+        survivors = sorted(p.name for p in (self.root / "var/cache").iterdir())
+        self.assertEqual(survivors, ["rpm-ostree"])
+
+    def test_directories_the_rebuild_stamped_are_repinned(self):
+        for path in (
+            self.root,
+            self.root / "var",
+            self.root / "var/cache",
+            self.root / "var/cache/rpm-ostree",
+        ):
+            self.assertEqual(
+                int(os.lstat(path).st_mtime),
+                SOURCE_DATE_EPOCH,
+                f"{path} was not re-pinned after the font cache rebuild",
+            )
+
+
+class ParentDirectoryPinTests(unittest.TestCase):
+    """A cache written under /usr also stamps every directory above it.
+
+    fc-cache creating /usr/lib/fontconfig/cache updates /usr/lib/fontconfig,
+    /usr/lib and /usr, all of which chunkah carries in a layer, so pinning the
+    cache alone still leaves three directories churning per rebuild.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "root"
+        self.root.mkdir()
+        build_tree(self.root)
+        harness = tempfile.TemporaryDirectory()
+        self.addCleanup(harness.cleanup)
+        record = Path(harness.name) / "fc-cache.record"
+        bin_dir = fc_cache_stub(Path(harness.name), record)
+        self.result = clean(self.root, stub_bin=bin_dir)
+        self.assertEqual(
+            self.result.returncode, 0,
+            f"clean-stage.sh failed:\n{self.result.stderr}")
+
+    def test_every_parent_of_the_cache_is_pinned(self):
+        for path in (
+            self.root,
+            self.root / "usr",
+            self.root / "usr/lib",
+            self.root / "usr/lib/fontconfig",
+            self.root / "usr/lib/fontconfig/cache",
+        ):
+            self.assertEqual(
+                int(os.lstat(path).st_mtime),
+                SOURCE_DATE_EPOCH,
+                f"{path} was not pinned after the font cache rebuild",
             )
 
 

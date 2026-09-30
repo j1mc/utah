@@ -45,7 +45,19 @@ find "${CLEAN_ROOT}/var"/* -maxdepth 0 -type d \! -name cache -exec rm -fr {} \;
 # the key file inside them:
 #   d /var/cache/libdnf5/nvidia-container-toolkit-<hash>/pubring
 #   var/cache/libdnf5/nvidia-container-toolkit-<hash>/pubring/DDCAE044F796ECB0.pub
-find "${CLEAN_ROOT}/var/cache"/* -maxdepth 0 -type d \! -name rpm-ostree -exec rm -fr {} \;
+#
+# This is a function because the font-cache rebuild at the end of the script can
+# put a fresh directory back here: fontconfig picks the first writable entry in
+# its cachedir list, and a configuration that lists /var/cache/fontconfig before
+# /usr/lib/fontconfig/cache -- the stock upstream order, which any host running
+# this script outside the Fedora image has -- would leave one behind after the
+# sweep below has already run. Whatever the rebuild deposits there is a cache
+# bootc does not expect, so the sweep is applied again once fc-cache is done.
+prune_var_cache() {
+    [ -d "${CLEAN_ROOT:?}/var/cache" ] || return 0
+    find "${CLEAN_ROOT:?}/var/cache"/* -maxdepth 0 -type d \! -name rpm-ostree -exec rm -fr {} \;
+}
+prune_var_cache
 
 # /run and /tmp are cleared by emptying them, not by replacing them. The
 # container runtime bind-mounts /run/.containerenv, so `rm -rf /run` fails with
@@ -100,6 +112,26 @@ done
 # its digest would still vary per rebuild. Pin them too, after the removals
 # above, which is why this block is last in the script.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1704067200}"
+pin() {
+    touch -h -d "@${SOURCE_DATE_EPOCH}" "$@"
+}
+# Pin `path` and every directory between it and CLEAN_ROOT, the root included.
+# Creating or rewriting a file stamps the wall clock on its parent, and on that
+# parent's parent when the entry itself is new, so a write that lands after the
+# sweep below has to be followed up the tree or the layer carrying any of those
+# directories churns again.
+pin_upwards() {
+    local path="$1" root="${CLEAN_ROOT%/}"
+    while [ "$path" != "$root" ] && [ "$path" != "/" ] && [ -n "$path" ]; do
+        # A path the sweep removed again -- /var/cache/fontconfig after the
+        # second prune -- has no mtime to pin, but its parents still do.
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            pin "$path"
+        fi
+        path="${path%/*}"
+    done
+    pin "${CLEAN_ROOT:?}"
+}
 for base in usr etc var; do
     [ -d "${CLEAN_ROOT:?}/${base}" ] || continue
     find "${CLEAN_ROOT}/${base}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
@@ -134,9 +166,22 @@ done
 if command -v fc-cache >/dev/null 2>&1; then
     SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
         fc-cache --sysroot="${CLEAN_ROOT:?}" --force --system-only
+    # fontconfig writes to the first writable cachedir its configuration lists.
+    # On the Fedora base that is /usr/lib/fontconfig/cache, but the stock
+    # upstream order puts /var/cache/fontconfig first, and bootc expects nothing
+    # under /var/cache but rpm-ostree -- so sweep /var/cache again rather than
+    # ship a directory the lint rejects.
+    prune_var_cache
     for cache in /usr/lib/fontconfig/cache /var/cache/fontconfig; do
         [ -d "${CLEAN_ROOT:?}${cache}" ] || continue
         find "${CLEAN_ROOT}${cache}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    done
+    # Both the rebuild and the sweep above ran after the pin loop, so every
+    # directory on the way to a cache -- /usr/lib/fontconfig, /usr/lib, /usr,
+    # /var/cache, /var and the root -- carries a wall-clock mtime again. Walk
+    # each path back up to the root and re-pin it.
+    for path in /usr/lib/fontconfig/cache /var/cache/fontconfig /var/cache; do
+        pin_upwards "${CLEAN_ROOT:?}${path}"
     done
 else
     # Not reachable in the image build -- fontconfig is a dependency of the
