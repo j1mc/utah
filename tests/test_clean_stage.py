@@ -563,5 +563,39 @@ class ParentDirectoryPinTests(unittest.TestCase):
             )
 
 
+class EmptyVarCacheTests(unittest.TestCase):
+    """A flavor with no /var/cache/rpm-ostree empties /var/cache entirely.
+
+    The sweep runs twice -- once up front, once after the font cache rebuild --
+    and on such a tree the second pass sees a directory with nothing in it.
+    A `/var/cache/*` glob matches nothing there, bash hands `find` the literal
+    pattern, `find` exits 1, and `set -e` takes the whole image build with it:
+    `Error: building at STEP "RUN ... utah-clean-stage ..."`.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "root"
+        self.root.mkdir()
+        build_tree(self.root)
+        shutil.rmtree(self.root / "var/cache/rpm-ostree")
+        harness = tempfile.TemporaryDirectory()
+        self.addCleanup(harness.cleanup)
+        record = Path(harness.name) / "fc-cache.record"
+        bin_dir = fc_cache_stub(Path(harness.name), record)
+        self.result = clean(self.root, stub_bin=bin_dir)
+
+    def test_script_succeeds(self):
+        self.assertEqual(
+            self.result.returncode, 0,
+            f"clean-stage.sh failed on an empty /var/cache:\n{self.result.stderr}")
+
+    def test_var_cache_survives_empty(self):
+        cache = self.root / "var/cache"
+        self.assertTrue(cache.is_dir(), "/var/cache must not be removed")
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

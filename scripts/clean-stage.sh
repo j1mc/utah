@@ -53,9 +53,15 @@ find "${CLEAN_ROOT}/var"/* -maxdepth 0 -type d \! -name cache -exec rm -fr {} \;
 # this script outside the Fedora image has -- would leave one behind after the
 # sweep below has already run. Whatever the rebuild deposits there is a cache
 # bootc does not expect, so the sweep is applied again once fc-cache is done.
+#
+# The sweep walks the directory rather than a `/var/cache/*` glob: the second
+# call runs after the first has already emptied it, and on a flavor that ships
+# no /var/cache/rpm-ostree the glob then matches nothing, so `find` is handed
+# the literal pattern, reports "No such file or directory" and exits 1 -- which
+# under `set -e` takes the build down with it.
 prune_var_cache() {
     [ -d "${CLEAN_ROOT:?}/var/cache" ] || return 0
-    find "${CLEAN_ROOT:?}/var/cache"/* -maxdepth 0 -type d \! -name rpm-ostree -exec rm -fr {} \;
+    find "${CLEAN_ROOT:?}/var/cache" -mindepth 1 -maxdepth 1 -type d \! -name rpm-ostree -exec rm -fr {} \;
 }
 prune_var_cache
 
