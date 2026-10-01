@@ -53,6 +53,16 @@ policy for changing them.
     and iwlegacy packages are named explicitly — the X230's
     `iwlwifi-6000g2a-6.ucode` ships in `iwlwifi-dvm-firmware` (#97).
   - `[services]` — desktop services Bluefin adds on top of the server base.
+    A service or config package that ships its own systemd unit or generator
+    config (e.g. `zram-generator-defaults` installs
+    `/usr/lib/systemd/zram-generator.conf`) needs only a manifest entry: the
+    generator reads that path at boot, so no `system_files/` staging and no
+    enablement in `scripts/configure-services.sh` are required. This is how
+    bare-metal swap was wired for #384 — the swap is enabled by the package's
+    own config, not by Utah. To override or disable it, drop an
+    `/etc/systemd/zram-generator.conf` (empty disables). A package that ships
+    nothing but a binary and needs a unit started still needs the enablement in
+    `configure-services.sh`, like the other `[services]` entries.
   - `[unavailable]` — Bluefin contract packages none of Utah's repositories
     provide.
 
@@ -168,7 +178,7 @@ default branch, preventing unrelated upstream changes from breaking Utah's CI.
 Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per the README "Package parity" section: 57 Bluefin contract
-packages installed, 85 Utah additions (GNOME 51, base-image parity, device
+packages installed, 87 Utah additions (GNOME 51, base-image parity, device
 firmware, desktop services), 10 genuinely unavailable. `scripts/check-doc-counts.py` (part of
 `just check`) recomputes these from the manifests and fails if either
 document drifts from `site/data/packages.json`.

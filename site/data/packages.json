@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-27",
+  "generated_at": "2026-09-30",
   "generator": "scripts/generate-site-data.py",
   "groups": [
     {
@@ -179,7 +179,9 @@
         "flatpak",
         "fwupd",
         "systemd-resolved",
-        "tailscale"
+        "tailscale",
+        "zram-generator",
+        "zram-generator-defaults"
       ],
       "title": "Desktop services",
       "transient": false
@@ -199,7 +201,7 @@
     }
   ],
   "totals": {
-    "installed": 142,
+    "installed": 144,
     "unavailable": 10
   },
   "unavailable": [
