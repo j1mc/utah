@@ -167,9 +167,9 @@ parity gate tests against a known revision rather than moving with Bluefin's
 default branch, preventing unrelated upstream changes from breaking Utah's CI.
 Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
-Current counts, per the README "Package parity" section: 57 Bluefin contract
-packages installed, 85 Utah additions (GNOME 51, base-image parity, device
-firmware, desktop services), 10 genuinely unavailable. `scripts/check-doc-counts.py` (part of
+Current counts, per the README "Package parity" section: 61 Bluefin contract
+packages installed, 86 Utah additions (GNOME 51, base-image parity, device
+firmware, desktop services), 6 genuinely unavailable. `scripts/check-doc-counts.py` (part of
 `just check`) recomputes these from the manifests and fails if either
 document drifts from `site/data/packages.json`.
 
@@ -198,3 +198,27 @@ python3 scripts/install-packages.py --check packages/bluefin.toml
 python3 scripts/verify-rpm-contract.py --check packages/bluefin.toml
 python3 scripts/check-doc-counts.py
 ```
+
+## Runtime ujust dependencies
+
+Common's `00-entry.just` imports `60-custom.just` after the shared recipes
+with duplicate recipes enabled, but earlier imports win at equal depth.
+The Containerfile preserves Common's entry point as `00-common.just` before
+installing Utah's local overlay. Utah's `00-entry.just` imports that file and
+`60-custom.just` at the same depth, so Utah's custom recipes are shallower
+than Common's defaults and take precedence. Common still supplies the default
+command and unrelated recipes. Keep these overrides small and test them through
+`just`, including import precedence, when changing Common's pin or runtime
+dependencies. The required Common import deliberately fails if composition
+forgets to preserve the original entry point.
+
+For #394, `device-info` prints a local report when `fpaste` is missing and
+only uploads after confirmation when it is available. Its temporary report is
+private and removed on exit. `changelogs` keeps Common's image/repository
+selection but prints Markdown directly when `glow` is absent; HTTP and parsing
+errors must remain failures. Enrollment reports the unsupported capability
+without running `sudo` or `mokutil`: Utah has no module-signing certificate,
+and shipping one without signing the modules would not fix Secure Boot.
+Signing and enrollment remain tracked by #395. Common's guarded
+`check-idle-power-draw` stays unchanged until the factory supplies `powerstat`.
+These fallbacks do not add packages or enable Fedora runtime repositories.

@@ -46,10 +46,15 @@ The TOML's sections are the contract's table of contents:
   flavor pattern `(main|nvidia|gaming|nvidia-gaming)` and the matching
   `ostree-image-signed` ref pattern.
 - **`[configuration]`** — the dconf distro databases and locks under
-  `/etc/dconf/db/distro.d/` must exist, and `file_contains` pins their
-  content: the gschema override references Bazaar and the Bluefin background
-  path, the custom command menu points at `docs.projectbluefin.io`, the
-  keybindings set `xdg-terminal-exec`.
+  `/etc/dconf/db/distro.d/` must exist, plus the GDM keyfile under
+  `/etc/dconf/db/gdm.d/01-bluefin-gdm-logo` that overrides
+  `org.gnome.login-screen.logo` to point at the Bluefin mark; otherwise
+  gnome-shell falls back to `fedora-logos`' Fedora wordmark at the greeter
+  (#378). `file_contains` pins the live configuration: the gschema override
+  references Bazaar and the Bluefin background path, the custom command menu
+  points at `docs.projectbluefin.io`, the keybindings set
+  `xdg-terminal-exec`, the GDM keyfile declares the login-screen schema and
+  the Bluefin asset path.
 - **`[flatpak]`** — first-boot policy: the Flathub remote
   (`https://dl.flathub.org/repo/`), the Bazaar preinstall, the
   `99-flatpaks.sh` privileged-setup hook, and the system-flatpaks Brewfile
@@ -127,6 +132,53 @@ system and glib-compile-schemas. Additionally, `scripts/build-gnome-extensions.s
 guards `src/shell/clipboard.js` against GNOME 48+ final GTypes: wrapping
 `GSConnectShellClipboard` registration in a try/catch prevents module load failures
 on `GjsPrivate.DBusImplementation`, gracefully degrading to an inert portal on GNOME 51.
+
+## The GDM greeter logo is Bluefin, not Fedora (#378)
+
+Without an `org.gnome.login-screen.logo` override, GDM shows the schema
+default — `/usr/share/pixmaps/fedora-gdm-logo.png`, shipped by
+`fedora-logos`. The greeter on every installed Utah therefore opened with
+the Fedora wordmark.
+
+A first attempt at the fix was a pixmap overlay: `common` already ships a
+Bluefin-branded `system_files/bluefin/usr/share/pixmaps/fedora-gdm-logo.png`,
+and Utah copies `common`'s full `system_files/bluefin/` tree into the
+image at `Containerfile:118` (`cp -a /tmp/utah-bluefin/. /`). That overlay
+would have replaced the Fedora wordmark without any dconf change. It is
+not effective in practice, however: `utah-install-packages` runs
+afterwards at `Containerfile:148-150`, and `baselines/utah/rpms.tsv` shows
+`fedora-logos 42.0.1-6.hum1` in the image — the package reinstalls its
+own `/usr/share/pixmaps/fedora-*.png` (GDM logo, plymouth logo,
+about-dialog logo, system-logo-white), clobbering every overlaid
+`pixmaps/fedora-*` file. The root-cause ticket is #398; this fix uses a
+second mechanism, not the pixmap overlay.
+
+GDM uses its own dconf profile (`/etc/dconf/profile/gdm`, provided by the
+gdm RPM). Utah ships a single keyfile,
+`system_files/shared/etc/dconf/db/gdm.d/01-bluefin-gdm-logo`, that sets
+`logo` to the same `bluefin.png` the desktop contract already asserts
+under `/usr/share/ublue-os/bluefin-logos/`. That avoids a duplicate asset
+in the overlay and means a brand refresh in `common` flows to both the
+desktop shell and the greeter without a second commit here.
+
+`scripts/configure-branding.sh` runs `dconf update` after stamping the
+contract files, so the greeter database is compiled at build time and a
+malformed keyfile fails the build rather than the post-install E2E that
+originally caught the regression. The compile is guarded on `/usr/bin/dconf`
+so it is a no-op on a host without the gnome-desktop stack (CI without
+`dnf install` of it).
+
+`dconf update` does **not** validate the logo path — it compiles keyfiles
+and stores `logo` as an opaque string, so a dangling path compiles
+cleanly. The image itself is guarded by the pre-existing `[branding].files`
+entry for `/usr/share/ublue-os/bluefin-logos/bluefin.png` in
+`contracts/bluefin-desktop.toml`, enforced by
+`utah-verify-desktop-contract` in the same `RUN` layer.
+
+`[configuration].files` asserts the keyfile's path on disk;
+`[configuration].file_contains` pins both the schema header and the
+asset path so a stray edit that points `logo` somewhere else fails the
+build.
 
 ## Services and login defaults
 
