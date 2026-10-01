@@ -3,9 +3,10 @@
 # then make what survives reproducible.
 #
 # Two jobs, in that order. The first is the lint sweep described below. The
-# second (utah#313) drops the dnf5 transaction history and pins every mtime the
-# image still carries to a fixed SOURCE_DATE_EPOCH, so a rebuild that changes
-# nothing produces identical layer digests. Both belong here because this is the
+# second (utah#313) drops the dnf5 transaction history and pins the mtimes the
+# build itself wrote -- the ones RPM did not record -- to a fixed
+# SOURCE_DATE_EPOCH, so a rebuild that changes nothing produces identical layer
+# digests. Both belong here because this is the
 # final layer: chunkah reads the merged rootfs, so a write here is the last one
 # and wins over the wall-clock mtimes the package and extension steps left.
 #
@@ -97,11 +98,36 @@ done
 # Reproducible builds: a rebuild that changes nothing must produce an identical
 # image. dnf, meson and the extension build write wall-clock mtimes into /usr
 # and /etc, and chunkah splits those directories across layers, so a changed
-# mtime in any tar header changes that layer's digest. Pin every file and
-# directory under /usr and /etc to SOURCE_DATE_EPOCH so a layer's digest is a
-# function of its content alone, not the CI wall-clock (utah#313). The value is
-# a fixed epoch, identical for every build, so the digest no longer depends on
-# when the build ran.
+# mtime in any tar header changes that layer's digest. Pin those mtimes to
+# SOURCE_DATE_EPOCH so a layer's digest is a function of its content alone, not
+# the CI wall-clock (utah#313). The value is a fixed epoch, identical for every
+# build, so the digest no longer depends on when the build ran.
+#
+# The pin is not a blanket touch of /usr. A path RPM installed and the build
+# never rewrote already carries a reproducible mtime -- the one from the package
+# payload, which is a function of the pinned package image, not of this build --
+# and re-stamping it does active harm:
+#
+#   * Fedora byte-compiles with --invalidation-mode=timestamp
+#     (brp-python-bytecompile), so each .pyc records the mtime its .py had at
+#     build time. Moving the .py to the epoch without rewriting the .pyc leaves
+#     every stdlib import stale: any container run of the image -- the ISO
+#     compose, CI, `podman run` -- recompiles the module in memory on each
+#     import. (A booted bootc host never sees this: ostree deploys every file
+#     with mtime 0, so the check is already lost there.)
+#   * `rpm -V` compares the same mtime and reports T for every file in the
+#     image, which makes the verification output useless for finding a real
+#     modification.
+#
+# So the sweep asks RPM what mtime it gave each path and skips the ones that
+# still match. What is left is exactly the churn: paths RPM does not own
+# (everything COPYed in, the GNOME extensions meson installs, the compiled
+# schemas) and paths RPM owns that the build rewrote afterwards (ld.so.cache,
+# the files `sed -i` edits, every directory dnf wrote into). Those have no
+# packaged mtime to preserve, so pinning them costs nothing and buys the
+# reproducible digest. Dakota's clean-stage pins directories only; this is the
+# same restraint, derived per path instead of by file type, so the extension
+# and COPY output is covered too.
 #
 # -h is load-bearing: without it touch follows symlinks, and a real image tree
 # is full of links whose target is not in the image -- /usr/lib/bootc/storage,
@@ -138,10 +164,60 @@ pin_upwards() {
     done
     pin "${CLEAN_ROOT:?}"
 }
+PIN_BASES=()
 for base in usr etc var; do
     [ -d "${CLEAN_ROOT:?}/${base}" ] || continue
-    find "${CLEAN_ROOT}/${base}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    PIN_BASES+=("./${base}")
 done
+# RPM's record of the mtime it gave each path, as `./path<TAB>seconds` lines so
+# it can be `comm`ed directly against find's output. `rpm` is absent when the
+# script runs against a scratch tree, and a tree with no rpmdb has nothing to
+# preserve, so an empty index means "pin everything" -- the behaviour this
+# block had before the index existed.
+# RPM's record of the mtime it gave each path, as `./path<TAB>seconds` lines so
+# it can be `comm`ed directly against find's output. `rpm` is absent when the
+# script runs against a scratch tree, and a tree with no rpmdb has nothing to
+# preserve, so an empty index means "pin everything" -- the behaviour this
+# block had before the index existed.
+#
+# The index is held in a variable rather than a temporary file on purpose. This
+# runs after the sweep has emptied /tmp and /var/tmp, so mktemp would either
+# write residue back into the image for bootc lint to reject or, with TMPDIR
+# pointing at a directory the sweep just removed, fail outright and take the
+# build down under `set -e`.
+PACKAGED_MTIMES=""
+if [ ${#PIN_BASES[@]} -gt 0 ] && command -v rpm >/dev/null 2>&1; then
+    PACKAGED_MTIMES="$(
+        rpm --root="${CLEAN_ROOT:?}" -qa --qf '[%{FILENAMES}\t%{FILEMTIMES}\n]' \
+            2>/dev/null | sed 's|^/|./|' | LC_ALL=C sort -u || true
+    )"
+    if [ -z "${PACKAGED_MTIMES}" ]; then
+        # rpm is installed but told us nothing: a missing or unreadable rpmdb.
+        # Fall back to the blanket pin rather than ship an unpinned tree, and
+        # say so, because the fallback is what reintroduces the .pyc and
+        # `rpm -V` damage described above.
+        echo "clean-stage: rpm reported no packaged mtimes, pinning every path" >&2
+    fi
+fi
+if [ ${#PIN_BASES[@]} -gt 0 ]; then
+    # Relative paths throughout: find prints them, rpm's are rewritten to match,
+    # and touch resolves them against the same directory.
+    (
+        cd "${CLEAN_ROOT:?}"
+        if [ -n "${PACKAGED_MTIMES}" ]; then
+            # A line that appears in both lists is a path still carrying the
+            # mtime RPM gave it. comm -23 drops those and leaves the rest.
+            comm -23 \
+                <(find "${PIN_BASES[@]}" -printf '%p\t%Ts\n' | LC_ALL=C sort) \
+                <(printf '%s\n' "${PACKAGED_MTIMES}") \
+                | cut -f1 \
+                | tr '\n' '\0' \
+                | xargs -0 -r touch -h -d "@${SOURCE_DATE_EPOCH}"
+        else
+            find "${PIN_BASES[@]}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+        fi
+    )
+fi
 # The root itself plus the two directories cleared in place. They are pinned
 # non-recursively because clear_dir already left them empty.
 for dir in "" /run /tmp; do
@@ -149,17 +225,27 @@ for dir in "" /run /tmp; do
     touch -h -d "@${SOURCE_DATE_EPOCH}" "${CLEAN_ROOT}${dir}"
 done
 
-# Pinning /usr invalidates every system fontconfig cache, so rebuild them here.
+# Pinning /usr/share/fonts invalidates every system fontconfig cache in the
+# layers a container runs from, so rebuild them here.
 # fontconfig only accepts a cache in /usr/lib/fontconfig/cache whose stored
 # checksum equals the font directory's current mtime exactly
 # (FcDirCacheValidateHelper in fccache.c). Fedora's fontconfig package rebuilds
 # those caches from a %transfiletriggerin that runs `fc-cache -s` inside the dnf
 # transaction that installs Utah's fonts, so the checksums it stores are the
 # wall-clock mtimes dnf just wrote. The pin loop above then re-stamps every
-# /usr/share/fonts directory to SOURCE_DATE_EPOCH, which leaves every one of
-# those caches stale: nothing else in the image re-runs fc-cache, so at runtime
-# each fontconfig client rescans the whole font tree into ~/.cache/fontconfig --
-# on every start, for any account whose home is not writable.
+# /usr/share/fonts directory dnf wrote into, which leaves those caches stale.
+#
+# Who that costs is worth being exact about, because the obvious claim -- that
+# every client rescans at runtime -- is wrong for the deployed system. A booted
+# bootc host deploys through ostree, which commits every file with mtime 0
+# (ostree docs/repo.md), so the checksum never matches there and the system
+# caches are equally stale before this pin and after it; GNOME falls back to the
+# per-user cache under ~/.cache/fontconfig either way. The rebuild is for the
+# places that read the image as a container, where the tar mtimes survive
+# verbatim: the ISO compose, CI, and `podman run` against the published image.
+# Those are a target -- the ISO is built from this image -- so the rebuild stays,
+# with the second, real reason that it has to anyway: fc-cache output written
+# before the pin carries a wall clock of its own and would churn its layer.
 #
 # So re-run it after the pin, when the directory mtimes are already final, and
 # export SOURCE_DATE_EPOCH: fontconfig clamps both the checksum and its nanosecond

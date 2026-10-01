@@ -327,6 +327,13 @@ build-ghcr base_name stream flavor kernel_pin="":
       --tag "localhost/$image_name:{{ stream }}" \
       --file Containerfile .
 
+# Prove a rebuild that changes nothing produces the same image (utah#313).
+# Builds the flavor twice, uncached, with the wall-clock build args held
+# constant, and diffs the ordered layer digests. Two full builds: slow, and
+# deliberately not part of `just check` or the PR matrix.
+check-reproducible flavor="main":
+    bash scripts/check-reproducible-build.sh "{{ flavor }}"
+
 # Compose with an RPM repository already in local containers-storage. This uses
 # the same Containerfile transaction as CI without waiting for publication.
 build-local stream="testing" package_image="localhost/utah-packages:local-merged":

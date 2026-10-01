@@ -19,6 +19,7 @@ assert on the tree that survives.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -293,8 +294,11 @@ class CleanStageTests(unittest.TestCase):
         dnf, meson and the extension build leave wall-clock mtimes under /usr
         and /etc, and chunkah splits those directories across layers, so a
         changed mtime in any tar header changes that layer's digest. clean-stage
-        pins every file and directory under /usr and /etc to SOURCE_DATE_EPOCH,
-        so a layer's digest is a function of its content alone (utah#313)."""
+        pins them to SOURCE_DATE_EPOCH, so a layer's digest is a function of its
+        content alone (utah#313). This tree has no rpmdb and the PATH has no
+        rpm, which is the fallback: nothing is packaged, so everything is
+        pinned. PackagedMtimeTests covers the image case, where RPM's own
+        mtimes are preserved."""
         self.assertCleanSucceeded()
         for path in (
             self.root / "usr/bin/tool",
@@ -595,6 +599,184 @@ class EmptyVarCacheTests(unittest.TestCase):
         cache = self.root / "var/cache"
         self.assertTrue(cache.is_dir(), "/var/cache must not be removed")
         self.assertEqual(sorted(p.name for p in cache.iterdir()), [])
+
+
+class PackagedMtimeTests(unittest.TestCase):
+    """The pin must skip paths still carrying the mtime RPM gave them.
+
+    A blanket `touch` of /usr rewrites every RPM-installed file, and two things
+    depend on those mtimes. Fedora byte-compiles with
+    `--invalidation-mode=timestamp`, so every .pyc records the mtime its .py had
+    at build time: moving the .py without rewriting the .pyc makes each stdlib
+    import recompile in memory on every container run of the image. And `rpm -V`
+    compares the same mtime, so it reports T for every file in the image, which
+    buries any real modification. Neither is visible on a booted bootc host --
+    ostree deploys with mtime 0 -- but the ISO compose, CI and `podman run` all
+    read the image as a container, where the stamp survives.
+
+    So clean-stage asks RPM what it gave each path and pins only the mismatches:
+    what RPM does not own, plus what the build rewrote after RPM wrote it.
+    """
+
+    # The tools the rpm-aware sweep needs on top of SCRIPT_COMMANDS.
+    EXTRA_COMMANDS = ("sort", "comm", "cut", "tr", "xargs", "sed")
+
+    # Packaged, never touched by the build: mtimes that match the index below.
+    PACKAGED_MTIME = 1600000000
+    # Packaged, then rewritten by the build -- ld.so.cache, a `sed -i` target.
+    # The index still carries the original, so the on-disk stamp is a mismatch.
+    REPACKAGED_ORIGINAL_MTIME = 1600000001
+    BUILD_MTIME = 2085840000
+
+    def harness(self, index_lines, root):
+        """A PATH with the script's tools and an `rpm` stub serving `index_lines`."""
+        harness = tempfile.TemporaryDirectory()
+        self.addCleanup(harness.cleanup)
+        base = Path(harness.name)
+        bin_dir = shadow_bin(base)
+        for name in self.EXTRA_COMMANDS:
+            resolved = shutil.which(name)
+            assert resolved is not None, f"{name} is required by clean-stage.sh"
+            target = bin_dir / name
+            if not target.exists():
+                target.symlink_to(resolved)
+        index = "".join(f"{path}\t{mtime}\n" for path, mtime in index_lines)
+        self.argv_record = base / "rpm.argv"
+        stub = bin_dir / "rpm"
+        # printf and the redirect are builtins: the stub has to run on the same
+        # stripped PATH as the script, which carries no `cat`.
+        stub.write_text(
+            "#!/usr/bin/bash\n"
+            "set -eu\n"
+            f'echo "$*" > "{self.argv_record}"\n'
+            f"printf '%s' {shlex.quote(index)}\n"
+        )
+        stub.chmod(0o755)
+        return clean(root, stub_bin=bin_dir, inherit_path=False)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        build_tree(self.root)
+        # A packaged file and the .pyc that records its mtime, the pairing the
+        # blanket touch desynced.
+        site = self.root / "usr/lib/python3.13/site-packages"
+        (site / "__pycache__").mkdir(parents=True)
+        self.packaged = site / "utahmod.py"
+        self.packaged.write_text("import os\n")
+        self.packaged_pyc = site / "__pycache__/utahmod.cpython-313.pyc"
+        self.packaged_pyc.write_bytes(b"pyc\n")
+        for path in (self.packaged, self.packaged_pyc):
+            os.utime(path, (self.PACKAGED_MTIME, self.PACKAGED_MTIME))
+        # Packaged, then rewritten by the build: on disk at the wall clock while
+        # the index still holds what RPM wrote.
+        self.rewritten = self.root / "etc/ld.so.cache"
+        self.rewritten.write_bytes(b"cache\n")
+        os.utime(self.rewritten, (self.BUILD_MTIME, self.BUILD_MTIME))
+        # A packaged directory nothing wrote into afterwards.
+        self.packaged_dir = self.root / "usr/share/licenses/malcontent"
+        os.utime(self.packaged_dir, (self.PACKAGED_MTIME, self.PACKAGED_MTIME))
+        self.result = self.harness(
+            [
+                (f"/{self.packaged.relative_to(self.root)}", self.PACKAGED_MTIME),
+                (f"/{self.packaged_pyc.relative_to(self.root)}", self.PACKAGED_MTIME),
+                (f"/{self.packaged_dir.relative_to(self.root)}", self.PACKAGED_MTIME),
+                (f"/{self.rewritten.relative_to(self.root)}",
+                 self.REPACKAGED_ORIGINAL_MTIME),
+            ],
+            self.root,
+        )
+
+    def assertCleanSucceeded(self):
+        self.assertEqual(
+            self.result.returncode, 0,
+            f"clean-stage.sh failed:\n{self.result.stderr}")
+
+    def test_the_rpmdb_is_read_under_clean_root(self):
+        """The query must be scoped to the tree being cleaned, not the host."""
+        self.assertCleanSucceeded()
+        argv = self.argv_record.read_text()
+        self.assertIn(f"--root={self.root}", argv)
+        self.assertIn("%{FILENAMES}", argv)
+        self.assertIn("%{FILEMTIMES}", argv)
+
+    def test_unmodified_packaged_files_keep_their_mtime(self):
+        self.assertCleanSucceeded()
+        for path in (self.packaged, self.packaged_pyc, self.packaged_dir):
+            self.assertEqual(
+                int(os.lstat(path).st_mtime),
+                self.PACKAGED_MTIME,
+                f"{path} was re-stamped even though it still had RPM's mtime",
+            )
+
+    def test_the_pyc_pairing_survives(self):
+        """The .py and its .pyc must come out of the sweep agreeing."""
+        self.assertCleanSucceeded()
+        self.assertEqual(
+            int(os.lstat(self.packaged).st_mtime),
+            int(os.lstat(self.packaged_pyc).st_mtime),
+            "the source and its byte-compiled form no longer agree, so every "
+            "import of it recompiles in memory",
+        )
+
+    def test_packaged_files_the_build_rewrote_are_pinned(self):
+        """RPM's record is stale for these, so there is nothing to preserve."""
+        self.assertCleanSucceeded()
+        self.assertEqual(
+            int(os.lstat(self.rewritten).st_mtime),
+            SOURCE_DATE_EPOCH,
+            f"{self.rewritten} kept a wall-clock mtime and would churn its layer",
+        )
+
+    def test_unpackaged_paths_are_still_pinned(self):
+        """Everything COPYed in or built in place still gets the epoch."""
+        self.assertCleanSucceeded()
+        for path in (
+            self.root / "usr/bin/tool",
+            self.root / "usr/share/doc/readme",
+            self.root / "etc/systemd/system/foo.service",
+            self.root / "usr/share/fonts/utah/Utah.ttf",
+            self.root / "usr/share/fonts/utah",
+            self.root / "usr/lib/bootc/storage",
+        ):
+            self.assertEqual(
+                int(os.lstat(path).st_mtime),
+                SOURCE_DATE_EPOCH,
+                f"{path} was not pinned to SOURCE_DATE_EPOCH",
+            )
+
+    def test_an_empty_rpmdb_falls_back_to_pinning_everything(self):
+        """rpm installed but reporting nothing must not ship an unpinned tree.
+
+        The fallback is the old blanket touch, which is worth announcing: it is
+        what reintroduces the .pyc and `rpm -V` damage.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_tree(root)
+            result = self.harness([], root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("rpm reported no packaged mtimes", result.stderr)
+            self.assertEqual(
+                int(os.lstat(root / "usr/bin/tool").st_mtime), SOURCE_DATE_EPOCH)
+
+    def test_no_index_is_left_behind_in_the_image(self):
+        """The packaged-mtime index must not reach the image.
+
+        It is held in a variable precisely because this runs after /tmp and
+        /var/tmp are emptied: a temp file there is residue `bootc container
+        lint --fatal-warnings` rejects, and with TMPDIR pointing at a directory
+        the sweep removed, mktemp fails and `set -e` takes the build with it.
+        """
+        self.assertCleanSucceeded()
+        self.assertEqual(
+            list((self.root / "tmp").iterdir()), [],
+            "/tmp must be empty: the packaged-mtime index has to be removed")
+        self.assertEqual(
+            int(os.lstat(self.root / "tmp").st_mtime),
+            SOURCE_DATE_EPOCH,
+            "/tmp must be pinned after the index is removed, not before")
 
 
 if __name__ == "__main__":

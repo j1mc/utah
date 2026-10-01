@@ -177,14 +177,14 @@ The same step also makes the image reproducible. It drops the dnf5 transaction
 history -- `usr/lib/sysimage/libdnf5/transaction_history.sqlite` and its
 `-shm`/`-wal` companions -- build-time metadata nothing reads at runtime, but
 it carries a wall-clock mtime that churns its layer on every rebuild. It then
-pins every file and directory under `/usr` and `/etc` to a fixed
-`SOURCE_DATE_EPOCH` (2024-01-01T00:00:00Z): chunkah splits those directories
-across layers, so any wall-clock mtime in a tar header changes that layer's
-digest. The pin also covers the directories the script rewrites itself -- `/`,
-`/var` (recursively, so the surviving `/var/cache/rpm-ostree` is included),
-`/run` and `/tmp` -- because removing an entry stamps the wall clock on the
-parent directory, and those entries ship in a layer too. A rebuild that changes
-nothing must produce an identical image
+pins the mtimes the build itself wrote under `/usr`, `/etc` and `/var` to a
+fixed `SOURCE_DATE_EPOCH` (2024-01-01T00:00:00Z): chunkah splits those
+directories across layers, so any wall-clock mtime in a tar header changes that
+layer's digest. The pin also covers the directories the script rewrites itself
+-- `/`, `/var` (recursively, so the surviving `/var/cache/rpm-ostree` is
+included), `/run` and `/tmp` -- because removing an entry stamps the wall clock
+on the parent directory, and those entries ship in a layer too. A rebuild that
+changes nothing must produce an identical image
 (utah#313). This normalization lands in `utah-clean-stage`, the final layer,
 because chunkah reads the merged rootfs -- a touch there is the last write, so
 it wins over the wall-clock mtimes the package and extension steps left. The
@@ -193,15 +193,41 @@ image (`/usr/lib/bootc/storage`, the malcontent `COPYING` links, the 32-bit
 `libstdc++.a` stubs), and a dereferencing `touch` exits non-zero on each one
 and fails the layer under `set -e`. `-h` stamps the link itself, which is the
 mtime the tar header carries anyway.
-Pinning `/usr` invalidates every system font cache, so the pin loop is followed
-by `fc-cache --sysroot="$CLEAN_ROOT" --force --system-only` with
-`SOURCE_DATE_EPOCH` exported. fontconfig accepts a cache under
+It is not a blanket `touch` of `/usr`, and must not become one. A path RPM
+installed and the build never rewrote already carries a reproducible mtime --
+the one from the package payload, fixed by the pinned package image -- and
+re-stamping it breaks two things that read it. Fedora byte-compiles with
+`--invalidation-mode=timestamp` (`brp-python-bytecompile`), so each `.pyc`
+records the mtime its `.py` had: move the source without rewriting the `.pyc`
+and every stdlib import recompiles in memory. And `rpm -V` compares the same
+mtime, so it reports `T` for every file in the image. Neither shows on a booted
+bootc host -- ostree deploys with mtime 0, so the check is already lost there --
+but the ISO compose, CI and `podman run` all read the image as a container,
+where the stamp survives. So `clean-stage.sh` asks RPM for the mtime it gave
+each path (`rpm --root -qa --qf '[%{FILENAMES}\t%{FILEMTIMES}\n]'`) and pins
+only the mismatches: what RPM does not own (everything COPYed in, the GNOME
+extensions meson installs, the compiled schemas) and what the build rewrote
+after RPM wrote it (`ld.so.cache`, `sed -i` targets, every directory dnf wrote
+into). Dakota's clean-stage pins directories only; this is the same restraint,
+derived per path rather than by file type, so the COPY and extension output is
+covered too. With no readable rpmdb -- a scratch tree in the unit tests -- the
+sweep falls back to pinning everything and says so on stderr.
+That pin re-stamps every `/usr/share/fonts` directory dnf wrote into, which
+invalidates the system font caches in the layers a container runs from, so the
+pin loop is followed by `fc-cache --sysroot="$CLEAN_ROOT" --force --system-only`
+with `SOURCE_DATE_EPOCH` exported. fontconfig accepts a cache under
 `/usr/lib/fontconfig/cache` only when its stored checksum equals the font
-directory's current mtime, and Fedora's `%transfiletriggerin` built those caches
-from the wall-clock mtimes dnf wrote; without the rebuild every client rescans
-the font tree at runtime. It must run after the pin, so the checksum records the
-final mtime, and its own output must then be re-pinned -- `fc-cache` writes with
-the wall clock. Re-pinning the cache alone is not enough: the rebuild also
+directory's current mtime (`FcDirCacheValidateHelper`, `fccache.c`), and
+Fedora's `%transfiletriggerin` built those caches from the wall-clock mtimes dnf
+wrote. Who the rebuild is for is worth being exact about: a booted bootc host
+deploys through ostree, which commits every file with mtime 0, so the system
+caches never validate there -- before this pin or after it -- and GNOME falls
+back to the per-user cache under `~/.cache/fontconfig` either way. The rebuild
+serves the container readers, where the tar mtimes survive verbatim: the ISO
+compose, CI, `podman run`. It must run after the pin, so the checksum records
+the final mtime, and its own output must then be re-pinned -- `fc-cache` writes
+with the wall clock, so leaving it would churn that layer. Re-pinning the cache
+alone is not enough: the rebuild also
 stamps every directory above it, so the pin walks each cache path back up to the
 root. And because fontconfig writes to the first writable entry in its cachedir
 list -- `/usr/lib/fontconfig/cache` on the Fedora base, but `/var/cache/
@@ -212,6 +238,16 @@ GSConnect's `_build/` after `meson install`, exactly as it already removes
 Blur My Shell's `build/`, so the timestamped artifact never reaches the image
 to be normalized downstream. Prefer dropping such a directory where it is made
 over re-touching it in `utah-clean-stage`.
+The acceptance test for all of this is an outcome, not a unit test:
+`just check-reproducible [flavor]` builds the flavor twice, uncached, with the
+wall-clock build args held constant, and diffs the ordered layer digests
+(`scripts/check-reproducible-build.sh`). `--no-cache` is the point -- a second
+`podman build` of an unchanged Containerfile otherwise replays the layer cache
+and passes whatever the build scripts leave behind. Two full builds, so it is
+not in `just check` or the PR matrix; run it when changing anything that writes
+into the image. It compares the layers podman commits, not the chunked layers
+the published image ships, so it catches rootfs churn but not a chunkah-side
+ordering instability (projectbluefin/actions#591).
 
 ## Verification
 

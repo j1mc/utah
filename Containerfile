@@ -270,9 +270,9 @@ RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages
 # is the NVIDIA and OGC step, not after the main transaction. The lint that
 # checks the result runs in the same layer: nothing can change between the two.
 # The same step makes the image reproducible (utah#313): it drops the dnf5
-# transaction history and pins every surviving mtime to a fixed
-# SOURCE_DATE_EPOCH, which only works from the final layer because chunkah reads
-# the merged rootfs.
+# transaction history and pins the mtimes the build itself wrote -- the ones RPM
+# did not record -- to a fixed SOURCE_DATE_EPOCH, which only works from the
+# final layer because chunkah reads the merged rootfs.
 # The home-label check runs first: clean-stage removes the utah-* helpers.
 RUN /usr/local/libexec/utah-fix-home-labels --check && \
     /usr/local/libexec/utah-clean-stage && \
