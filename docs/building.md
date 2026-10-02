@@ -15,6 +15,18 @@ just boot-vm
 ENABLE_SSHD=1 just build-ghcr utah testing main
 ```
 
+`just check` ends in `just test`, the host-side suite under `tests/`. It needs
+two third-party Python modules — `pyyaml` and `jsonschema` — which a clean
+checkout does not have. They are declared in
+[`tests/requirements.txt`](../tests/requirements.txt); install them once:
+
+```bash
+pip install -r tests/requirements.txt
+```
+
+`just test` refuses to run and names the file when either is missing, so a
+missing dependency never arrives disguised as a test failure.
+
 The image is tagged `localhost/utah:testing`. `generate-bootable-image` uses
 `bootc install to-disk` to create `output/bootable.raw`; `boot-vm` runs that disk
 with `ghcr.io/qemus/qemu` and serves the graphical console at the printed URL.
@@ -37,6 +49,8 @@ just luks-test                  # install to an encrypted disk over SSH, boot it
 just try-installed              # re-boot the disk luks-test installed, with a browser console
 just check-desktop-contract     # branding, services, and Flatpak policy against a built image
 just check-repos                # every contract package resolves in the enabled repositories
+just check-reproducible main    # two real uncached builds; compare ordered layers
+just check-reproducible gaming  # same signed kernel-cache route as CI; needs cosign
 ```
 
 `just luks-test` drives `iso/scripts/luks-e2e.sh`: it installs from the ISO's

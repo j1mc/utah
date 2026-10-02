@@ -39,8 +39,13 @@ cat >"${IMAGE_INFO}" <<EOF
 }
 EOF
 
-# Replace Hummingbird/Fedora identity without assuming a particular ordering of
-# os-release keys. All values are deliberately shell-quoted as os-release data.
+# The scanner-facing identity fields (ID, VERSION_ID, CPE_NAME) are
+# intentionally left at whatever the Hummingbird base ships. CVE scanners
+# (Trivy, ...) answer "is this based on Hummingbird?" and pick their
+# vulnerability database from these three keys; branding them to "utah" makes
+# the image look like a non-Fedora image with no CVE data to match against.
+# The cosmetic/branding fields below are what show up in boot entries and are
+# safe to set. os-release keys are rewritten without assuming an ordering.
 set_os_release() {
     local key="$1" value="$2"
     if grep -q "^${key}=" /usr/lib/os-release; then
@@ -53,10 +58,7 @@ set_os_release() {
 set_os_release NAME "${IMAGE_PRETTY_NAME}"
 set_os_release VARIANT_ID "${IMAGE_ID}"
 set_os_release PRETTY_NAME "${IMAGE_PRETTY_NAME} (Version: ${VERSION})"
-set_os_release ID "${IMAGE_PRETTY_NAME,,}"
 set_os_release ID_LIKE "${IMAGE_LIKE}"
-set_os_release VERSION_ID "${FEDORA_MAJOR_VERSION}"
-set_os_release CPE_NAME "cpe:/o:universal-blue:utah"
 set_os_release HOME_URL "https://projectbluefin.io"
 set_os_release DOCUMENTATION_URL "https://docs.projectbluefin.io"
 set_os_release SUPPORT_URL "https://github.com/projectbluefin/utah/issues/"

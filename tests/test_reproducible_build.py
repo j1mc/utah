@@ -60,8 +60,14 @@ class ReproducibilityCheckTests(unittest.TestCase):
         self.podman.chmod(0o755)
         self.build_log = self.tmp / "builds"
         self.build_log.write_text("")
+        self.skopeo = self.tmp / "skopeo"
+        self.skopeo.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"Digest":"sha256:verified-cache"}\'\n')
+        self.skopeo.chmod(0o755)
+        self.cosign = self.tmp / "cosign"
+        self.cosign.write_text('#!/bin/sh\nexit "${VERIFY_STATUS:-0}"\n')
+        self.cosign.chmod(0o755)
 
-    def run_check(self, first: str, second: str, flavor: str = "main"):
+    def run_check(self, first: str, second: str, flavor: str = "main", verify_status: int = 0):
         layers_a = self.tmp / "a"
         layers_b = self.tmp / "b"
         layers_a.write_text(first)
@@ -72,6 +78,9 @@ class ReproducibilityCheckTests(unittest.TestCase):
             "BUILD_LOG": str(self.build_log),
             "LAYERS_A": str(layers_a),
             "LAYERS_B": str(layers_b),
+            "SKOPEO": str(self.skopeo),
+            "COSIGN": str(self.cosign),
+            "VERIFY_STATUS": str(verify_status),
         })
         return subprocess.run(
             ["bash", str(SCRIPT), flavor],
@@ -119,6 +128,17 @@ class ReproducibilityCheckTests(unittest.TestCase):
         self.run_check(IDENTICAL, IDENTICAL, flavor="nvidia-gaming")
         for invocation in self.builds():
             self.assertIn("--build-arg IMAGE_FLAVOR=nvidia-gaming", invocation)
+
+    def test_kernel_flavors_build_only_the_verified_immutable_cache(self):
+        result = self.run_check(IDENTICAL, IDENTICAL, flavor="nvidia")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for invocation in self.builds():
+            self.assertIn("BASE_IMAGE=ghcr.io/projectbluefin/utah-kernel-cache@sha256:verified-cache", invocation)
+
+    def test_invalid_cache_signature_prevents_both_builds(self):
+        result = self.run_check(IDENTICAL, IDENTICAL, flavor="gaming", verify_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.builds(), [])
 
     def test_an_unknown_flavor_is_rejected_before_building(self):
         result = self.run_check(IDENTICAL, IDENTICAL, flavor="desktop")

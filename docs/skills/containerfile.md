@@ -1,7 +1,7 @@
 ---
 name: containerfile
 version: "1.0"
-last_updated: "2026-09-30"
+last_updated: "2026-10-02"
 id: containerfile
 one_line_purpose: Edit the Containerfile without regressing layer count or cache hits.
 entry_point: docs/skills/containerfile.md
@@ -132,14 +132,19 @@ pushed once.
 
 ## Adding a script
 
+Hummingbird symlinks `/usr/local` to `../var/usrlocal`, and `clean-stage` drops
+`/var` seed content during composition. Utah image helpers belong in immutable
+`/usr/libexec` so they survive cleanup and remain available at runtime, while
+preserving `/usr/local` for writable host administrator software.
+
 All of Utah's scripts arrive in one COPY, staged under `/tmp/utah-scripts/`
 because a multi-source COPY cannot rename, and installed by name into
-`/usr/local/libexec/` by the rename loop in the same RUN (comment and loop,
+`/usr/libexec/` by the rename loop in the same RUN (comment and loop,
 `Containerfile`). The checklist for a new script:
 
 1. Add the file to the `COPY scripts/... /tmp/utah-scripts/` list.
 2. Add a `source:utah-<name>` pair to the rename loop so it lands at
-   `/usr/local/libexec/utah-<name>` -- every downstream path expects the
+   `/usr/libexec/utah-<name>` -- every downstream path expects the
    `utah-` prefix.
 3. Run `just check`.
 
@@ -173,12 +178,12 @@ last package install, which is the NVIDIA and OGC step, not after the main
 transaction. The lint that checks the result runs in the same layer
 (`bootc container lint --fatal-warnings --skip nonempty-boot`): nothing can
 change between the two (comment, `Containerfile`).
-The same step also makes the image reproducible. It drops the dnf5 transaction
+The same step removes final-rootfs build residue. It drops the dnf5 transaction
 history -- `usr/lib/sysimage/libdnf5/transaction_history.sqlite` and its
 `-shm`/`-wal` companions -- build-time metadata nothing reads at runtime, but
 it carries a wall-clock mtime that churns its layer on every rebuild. It then
-pins the mtimes the build itself wrote under `/usr`, `/etc` and `/var` to a
-fixed `SOURCE_DATE_EPOCH` (2024-01-01T00:00:00Z): chunkah splits those
+pins the mtimes the build itself wrote under `/usr`, `/etc`, `/var` and `/boot`
+to `SOURCE_DATE_EPOCH` (the source commit timestamp in the build recipes): chunkah splits those
 directories across layers, so any wall-clock mtime in a tar header changes that
 layer's digest. The pin also covers the directories the script rewrites itself
 -- `/`, `/var` (recursively, so the surviving `/var/cache/rpm-ostree` is
@@ -219,13 +224,12 @@ with `SOURCE_DATE_EPOCH` exported. fontconfig accepts a cache under
 `/usr/lib/fontconfig/cache` only when its stored checksum equals the font
 directory's current mtime (`FcDirCacheValidateHelper`, `fccache.c`), and
 Fedora's `%transfiletriggerin` built those caches from the wall-clock mtimes dnf
-wrote. Who the rebuild is for is worth being exact about: a booted bootc host
-deploys through ostree, which commits every file with mtime 0, so the system
-caches never validate there -- before this pin or after it -- and GNOME falls
-back to the per-user cache under `~/.cache/fontconfig` either way. The rebuild
-serves the container readers, where the tar mtimes survive verbatim: the ISO
-compose, CI, `podman run`. It must run after the pin, so the checksum records
-the final mtime, and its own output must then be re-pinned -- `fc-cache` writes
+wrote. On a deployed bootc host fontconfig specially accepts directories with
+mtime 0 (`FcDirCacheMapHelper`, `fccache.c`); this is not a deployed-host rescan
+fix. The rebuild removes the trigger caches' embedded wall-clock checksums for
+reproducibility and gives container readers (ISO compose, CI, `podman run`)
+caches matching the final font-directory mtimes. It must run after the pin,
+so the checksum records the final mtime, and its own output must then be re-pinned -- `fc-cache` writes
 with the wall clock, so leaving it would churn that layer. Re-pinning the cache
 alone is not enough: the rebuild also
 stamps every directory above it, so the pin walks each cache path back up to the
@@ -233,6 +237,9 @@ root. And because fontconfig writes to the first writable entry in its cachedir
 list -- `/usr/lib/fontconfig/cache` on the Fedora base, but `/var/cache/
 fontconfig` in the stock upstream order -- the `/var/cache` sweep that leaves
 bootc only `rpm-ostree` runs a second time after the rebuild.
+Use `fc-cache-64` directly when Fedora provides it: its `fc-cache` wrapper
+swallows architecture-specific failures, which must instead fail composition.
+`FC_CACHE` selects an explicit executable for isolated scratch-tree tests.
 The same principle applies at the source: `build-gnome-extensions.sh` removes
 GSConnect's `_build/` after `meson install`, exactly as it already removes
 Blur My Shell's `build/`, so the timestamped artifact never reaches the image
@@ -248,6 +255,66 @@ not in `just check` or the PR matrix; run it when changing anything that writes
 into the image. It compares the layers podman commits, not the chunked layers
 the published image ships, so it catches rootfs churn but not a chunkah-side
 ordering instability (projectbluefin/actions#591).
+Non-main flavors resolve the same content-hash kernel-cache tag as `build-ghcr`,
+verify the immutable digest with cosign, and hold that base constant for both
+builds; they do not accidentally recompile the kernel on the pristine base.
+An explicit local `BASE_IMAGE` supports development caches. A real two-build
+run is required before claiming reproducibility: unit fixtures prove cleanup
+behavior, not byte-identical image layers. Also compare two published rechunked
+manifests on the same candidate when claiming the published-image outcome.
+
+### Timestamp discipline starts before the transaction
+
+The first real two-build run exposed two clocks a final `touch` cannot fix.
+Native COPY layers had different destination-directory timestamps, and the
+final RPM database still differed in the `INSTALLTIME`/`INSTALLTID` header
+fields (807 installed packages), not merely its file mtime. RPM 6's
+`rpmtsCreate`/`rpmtsGetTime` honor `SOURCE_DATE_EPOCH`, so the final stage
+exports it before any transaction. The build recipes and acceptance run use
+the source commit timestamp, held constant for the candidate, and pass
+`--source-date-epoch` plus `--rewrite-timestamp` to Podman. The first fixes
+image-created metadata and supplies the declared build argument; the second
+clamps later tar-entry timestamps, including COPY directories and whiteouts.
+Do not replace them with `--timestamp`, which rewrites all newly committed
+file mtimes and breaks RPM's earlier Python timestamp-bytecode pairing.
+
+Commit/freeze the candidate before the two builds and never edit that checkout
+mid-run. The observed old PR commit epoch (`1790872356`) predates the current
+pin's newest RPM payload mtime (`1790899200`), whereas the integrated main
+commit (`1790960685`) is later: a source epoch must not predate its pinned
+payload. When testing an older checkout against newer input pins, supply a
+fixed `SOURCE_DATE_EPOCH` from the integrated source commit, never clock-now.
+The epoch is an early build argument because RPM transaction content depends
+on it; a new source epoch invalidates those cache keys intentionally.
+
+The comparator still checks every ordered native layer. Timestamp plumbing
+does not establish that generated content such as intermediate transaction
+logs is deterministic; retain any frozen-run diff and fix its producer.
+Do not squash or ignore layers to claim a passing acceptance result.
+
+## `just` override and the 1.56 floor
+
+Utah's `00-entry.just` imports Common's renamed entry (`00-common.just`) plus
+its own `60-custom.just` at a shallower depth than Common's own `import?`
+lines reach `60-custom.just`. The override wins on `just` >= 1.56, which
+stopped deduplicating an AST across nested imports of the same file; earlier
+versions deduplicated, Common's deeper import shadowed ours, and every
+override silently reverted to Common's recipe (issue #449). The Containerfile
+preserves the mechanism by renaming Common's `00-entry.just` to
+`00-common.just` before staging Utah's local files, so the shallower override
+is in place by the time the entry point runs.
+
+The shipped image is already past the floor: `baselines/utah/rpms.tsv` records
+`just 1.57.0-1.hum1.bfin` (Bluefin's parity manifest, `baselines/bluefin/rpms.tsv`,
+records `1.57.0-1.fc44`). The `just` package is inherited from Bluefin and its
+version is not pinned here. Two checks keep it that way:
+`tests/test_ujust_overrides.py` asserts the baseline NEVR stays >= 1.56 so an
+image regression below the floor fails the suite, and the same module's
+host-side override tests skip with a message naming issue #449 when the
+developer's own `just` is below the floor. `just` is already listed in
+`packages/bluefin.toml` as part of the mirrored parity manifest -- do not pin
+or override its version there or in `packages/utah.toml`; that contract
+belongs to Bluefin.
 
 ## Verification
 

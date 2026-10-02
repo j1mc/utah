@@ -24,9 +24,9 @@
 #
 # What is compared is RootFS.Layers: the ordered list of uncompressed layer
 # digests, which is a function of the tar stream and therefore of every mtime,
-# mode, owner and byte in it. The image config is deliberately not compared --
-# it records a creation timestamp that is wall-clock by construction, and
-# `podman build --timestamp` is the separate knob for that.
+# mode, owner and byte in it. The same source-derived epoch as production fixes
+# config timestamps and clamps newly generated layer headers, without rewriting
+# earlier RPM-owned mtimes as a blanket --timestamp would.
 #
 # Known limitation, stated so a passing run is not read as more than it is: this
 # builds with podman, so it sees the layers the Containerfile declares, not the
@@ -45,6 +45,7 @@ PODMAN="${PODMAN:-podman}"
 VERSION="${VERSION:-reproducibility-probe}"
 SHA_HEAD_SHORT="${SHA_HEAD_SHORT:-probe}"
 REPO_ORGANIZATION="${REPO_ORGANIZATION:-projectbluefin}"
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct HEAD)}"
 
 case "${FLAVOR}" in
     main | nvidia | gaming | nvidia-gaming) ;;
@@ -53,6 +54,26 @@ case "${FLAVOR}" in
         exit 2
         ;;
 esac
+
+# Match build-ghcr's cache route, resolving it once for both builds. Otherwise
+# kernel flavors compile from the pristine base rather than test the image CI
+# ships. Only explicit local BASE_IMAGE overrides are unsigned development input.
+if [ "${FLAVOR}" != main ]; then
+    BASE_IMAGE="${BASE_IMAGE:-ghcr.io/${REPO_ORGANIZATION,,}/utah-kernel-cache:$(./scripts/kernel-cache-tag.sh)}"
+    if [[ "${BASE_IMAGE}" == ghcr.io/* ]]; then
+        COSIGN="${COSIGN:-cosign}"
+        command -v "${COSIGN}" >/dev/null 2>&1 || {
+            echo "cosign is required to verify the kernel cache" >&2
+            exit 1
+        }
+        digest="$("${SKOPEO:-skopeo}" inspect "docker://${BASE_IMAGE}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Digest"])')"
+        cache_repository="${BASE_IMAGE%%@*}"
+        BASE_IMAGE="${cache_repository%:*}@${digest}"
+        "${COSIGN}" verify "${BASE_IMAGE}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github\.com/projectbluefin/utah/\.github/workflows/build\.yml@refs/(heads/[^@]+|pull/[0-9]+/merge)$'
+    fi
+fi
 
 build() {
     # $1 is the tag. Each run is a full, uncached build of the same inputs.
@@ -66,6 +87,8 @@ build() {
     fi
     "${PODMAN}" build \
         --no-cache \
+        --source-date-epoch "${SOURCE_DATE_EPOCH}" \
+        --rewrite-timestamp \
         "${base_args[@]}" \
         --build-arg IMAGE_NAME=utah \
         --build-arg IMAGE_ID=utah \

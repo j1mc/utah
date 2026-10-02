@@ -64,12 +64,14 @@ def build_tree(root: Path) -> None:
     # script must drop. The mtime test asserts clean-stage pins the former to
     # SOURCE_DATE_EPOCH and removes the latter (utah#313).
     for directory in ("usr/bin", "usr/share/doc", "etc/systemd/system",
-                      "usr/share/fonts/utah"):
+                      "usr/share/fonts/utah", "boot"):
         (root / directory).mkdir(parents=True)
     (root / "usr/bin/tool").write_text("binary\n")
     (root / "usr/share/doc/readme").write_text("doc\n")
     (root / "etc/systemd/system/foo.service").write_text("[Unit]\n")
     (root / "usr/share/fonts/utah/Utah.ttf").write_bytes(b"ttf\n")
+    (root / "boot/vmlinuz-7.2.6-ogc1").write_bytes(b"kernel\n")
+    (root / "boot/vmlinuz").symlink_to("vmlinuz-7.2.6-ogc1")
     # Year 2036 -- well after the epoch the script pins to -- so a failure to
     # normalise is unmistakable rather than a coincidence with the target.
     future = 2085840000
@@ -91,7 +93,7 @@ def build_tree(root: Path) -> None:
     (root / "usr/share/licenses/malcontent/COPYING").symlink_to(
         "../../doc/malcontent/COPYING")
     (root / "usr/lib/bootc").mkdir(parents=True)
-    (root / "usr/lib/bootc/storage").symlink_to("/sysroot/ostree/bootc/storage")
+    (root / "usr/lib/bootc/storage").symlink_to("missing-storage")
 
 
 def clean(root: Path, stub_bin: Path | None = None,
@@ -107,9 +109,12 @@ def clean(root: Path, stub_bin: Path | None = None,
     path = "/usr/bin:/bin" if inherit_path else ""
     if stub_bin is not None:
         path = f"{stub_bin}:{path}" if path else str(stub_bin)
+    env = {"PATH": path, "CLEAN_ROOT": str(root)}
+    if stub_bin is not None and (stub_bin / "fc-cache").is_file():
+        env["FC_CACHE"] = str(stub_bin / "fc-cache")
     return subprocess.run(
         ["bash", str(SCRIPT)],
-        env={"PATH": path, "CLEAN_ROOT": str(root)},
+        env=env,
         capture_output=True,
         text=True,
     )
@@ -312,6 +317,12 @@ class CleanStageTests(unittest.TestCase):
                 f"{path} was not pinned to SOURCE_DATE_EPOCH",
             )
 
+    def test_boot_kernel_directory_and_symlink_are_pinned(self):
+        self.assertCleanSucceeded()
+        for path in (self.root / "boot", self.root / "boot/vmlinuz",
+                     self.root / "boot/vmlinuz-7.2.6-ogc1"):
+            self.assertEqual(int(path.lstat().st_mtime), SOURCE_DATE_EPOCH)
+
     def test_rewritten_directories_are_pinned_too(self):
         """The directories clean-stage itself rewrites must be pinned as well.
 
@@ -409,9 +420,8 @@ class FontCacheTests(unittest.TestCase):
     caches from a %transfiletriggerin -- `fc-cache -s`, inside the dnf
     transaction that installs Utah's fonts -- so they record the wall-clock
     mtimes dnf wrote. clean-stage then re-stamps /usr/share/fonts to
-    SOURCE_DATE_EPOCH, and unless it rebuilds the caches afterwards every one of
-    them is stale in the shipped image: each fontconfig client rescans the font
-    tree on every start for any account whose home is not writable.
+    SOURCE_DATE_EPOCH, and the rebuild removes the caches' embedded wall-clock
+    checksums while matching the final tar mtimes for container readers.
     """
 
     def setUp(self):

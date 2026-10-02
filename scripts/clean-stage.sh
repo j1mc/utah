@@ -100,8 +100,8 @@ done
 # and /etc, and chunkah splits those directories across layers, so a changed
 # mtime in any tar header changes that layer's digest. Pin those mtimes to
 # SOURCE_DATE_EPOCH so a layer's digest is a function of its content alone, not
-# the CI wall-clock (utah#313). The value is a fixed epoch, identical for every
-# build, so the digest no longer depends on when the build ran.
+# the CI wall-clock (utah#313). The value is fixed by the source inputs for a
+# candidate, so repeating that build never depends on when it ran.
 #
 # The pin is not a blanket touch of /usr. A path RPM installed and the build
 # never rewrote already carries a reproducible mtime -- the one from the package
@@ -165,15 +165,10 @@ pin_upwards() {
     pin "${CLEAN_ROOT:?}"
 }
 PIN_BASES=()
-for base in usr etc var; do
+for base in usr etc var boot; do
     [ -d "${CLEAN_ROOT:?}/${base}" ] || continue
     PIN_BASES+=("./${base}")
 done
-# RPM's record of the mtime it gave each path, as `./path<TAB>seconds` lines so
-# it can be `comm`ed directly against find's output. `rpm` is absent when the
-# script runs against a scratch tree, and a tree with no rpmdb has nothing to
-# preserve, so an empty index means "pin everything" -- the behaviour this
-# block had before the index existed.
 # RPM's record of the mtime it gave each path, as `./path<TAB>seconds` lines so
 # it can be `comm`ed directly against find's output. `rpm` is absent when the
 # script runs against a scratch tree, and a tree with no rpmdb has nothing to
@@ -185,6 +180,8 @@ done
 # write residue back into the image for bootc lint to reject or, with TMPDIR
 # pointing at a directory the sweep just removed, fail outright and take the
 # build down under `set -e`.
+# Never trace the ~65k-path RPM index into the build log.
+set +x
 PACKAGED_MTIMES=""
 if [ ${#PIN_BASES[@]} -gt 0 ] && command -v rpm >/dev/null 2>&1; then
     PACKAGED_MTIMES="$(
@@ -207,7 +204,7 @@ if [ ${#PIN_BASES[@]} -gt 0 ]; then
         if [ -n "${PACKAGED_MTIMES}" ]; then
             # A line that appears in both lists is a path still carrying the
             # mtime RPM gave it. comm -23 drops those and leaves the rest.
-            comm -23 \
+            LC_ALL=C comm -23 \
                 <(find "${PIN_BASES[@]}" -printf '%p\t%Ts\n' | LC_ALL=C sort) \
                 <(printf '%s\n' "${PACKAGED_MTIMES}") \
                 | cut -f1 \
@@ -218,6 +215,7 @@ if [ ${#PIN_BASES[@]} -gt 0 ]; then
         fi
     )
 fi
+set -x
 # The root itself plus the two directories cleared in place. They are pinned
 # non-recursively because clear_dir already left them empty.
 for dir in "" /run /tmp; do
@@ -235,17 +233,12 @@ done
 # wall-clock mtimes dnf just wrote. The pin loop above then re-stamps every
 # /usr/share/fonts directory dnf wrote into, which leaves those caches stale.
 #
-# Who that costs is worth being exact about, because the obvious claim -- that
-# every client rescans at runtime -- is wrong for the deployed system. A booted
-# bootc host deploys through ostree, which commits every file with mtime 0
-# (ostree docs/repo.md), so the checksum never matches there and the system
-# caches are equally stale before this pin and after it; GNOME falls back to the
-# per-user cache under ~/.cache/fontconfig either way. The rebuild is for the
-# places that read the image as a container, where the tar mtimes survive
-# verbatim: the ISO compose, CI, and `podman run` against the published image.
-# Those are a target -- the ISO is built from this image -- so the rebuild stays,
-# with the second, real reason that it has to anyway: fc-cache output written
-# before the pin carries a wall clock of its own and would churn its layer.
+# The rebuild also removes wall-clock checksums embedded by the RPM trigger.
+# On an OSTree deployment, fontconfig specially accepts font directories with
+# mtime 0 (FcDirCacheMapHelper), so this is not a deployed-host rescan fix.
+# Container readers (ISO compose, CI and podman run) do retain the tar mtimes,
+# and need caches that agree with the final directory mtimes. Both consumers
+# need the embedded checksums to be byte-stable across image rebuilds.
 #
 # So re-run it after the pin, when the directory mtimes are already final, and
 # export SOURCE_DATE_EPOCH: fontconfig clamps both the checksum and its nanosecond
@@ -255,9 +248,13 @@ done
 #
 # fc-cache writes those files now, with the wall clock, so re-pin the cache
 # directories afterwards or this reintroduces the churn the pin removed.
-if command -v fc-cache >/dev/null 2>&1; then
+# Fedora's fc-cache wrapper swallows errors from its architecture-specific
+# binaries. Invoke the 64-bit implementation directly when available so a
+# failed rebuild fails the image; FC_CACHE confines scratch-tree tests.
+fc_cache="${FC_CACHE:-$(command -v fc-cache-64 || command -v fc-cache || true)}"
+if [ -n "${fc_cache}" ]; then
     SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
-        fc-cache --sysroot="${CLEAN_ROOT:?}" --force --system-only
+        "${fc_cache}" --sysroot="${CLEAN_ROOT:?}" --force --system-only
     # fontconfig writes to the first writable cachedir its configuration lists.
     # On the Fedora base that is /usr/lib/fontconfig/cache, but the stock
     # upstream order puts /var/cache/fontconfig first, and bootc expects nothing
