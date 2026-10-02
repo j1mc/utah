@@ -11,9 +11,9 @@
 #   [hardware]     device firmware the bootable base leaves out entirely
 #   [build]        toolchain needed to build the pinned GNOME extensions
 #   [services]     desktop daemons enabled after the server base (cryptsetup, flatpak, fwupd, ...)
-#   [unavailable]  Bluefin parity gaps none of Utah's enabled repositories
-#                  provide -- from the copied base.toml contract or from the
-#                  published Bluefin image snapshot (baselines/bluefin/rpms.tsv)
+#   [unavailable]  Bluefin parity gaps Utah's image does not carry -- names none
+#                  of Utah's enabled repositories provide (contract or image gaps),
+#                  or packages Utah deliberately declines to ship
 #
 # On [multimedia_overrides], which Utah deliberately does not install:
 #
@@ -26,10 +26,10 @@
 #   and the practical consequence is hardware-accelerated codec support.
 #
 #   This is why they are absent from the contract rather than listed under
-#   [unavailable]: [unavailable] means "no repository Utah enables provides this
-#   name at all", which is false of these. Recording them as missing would be
-#   wrong, and recording them as satisfied would hide a real functional
-#   difference from Bluefin.
+#   [unavailable]: neither [unavailable] case fits. No enabled repo is missing
+#   the name, and Utah is not declining to ship the name -- it ships Fedora's
+#   build of it. Recording them as missing would be wrong, and recording them
+#   as satisfied would hide a real functional difference from Bluefin.
 #
 #   The factory is already building several of them for Hummingbird --
 #   intel-gmmlib, intel-mediasdk, intel-vpl-gpu-rt, libheif and libva all built
@@ -323,18 +323,13 @@ packages = [
 ]
 
 [unavailable]
-# Bluefin parity gaps none of Utah's enabled repositories provide.  Two kinds
-# of gap land here and both count as parity debt:
-#
-#   contract gaps  names in packages/bluefin.toml (the copied base.toml) that
-#                  neither utah-packages nor Hummingbird's repository carries
-#   image gaps     names Bluefin's published image ships from a build file
-#                  outside the copied contract, recorded in the snapshot at
-#                  baselines/bluefin/rpms.tsv and triaged in
-#                  baselines/triage.toml
-#
-# Each entry MUST carry a tracking issue: this list is the documented parity
-# debt, not a dumping ground for packages that are merely inconvenient.
+# Bluefin parity gaps Utah's image does not carry.  Two kinds of gap land
+# here: no enabled repository provides the name at all (contract or image
+# gaps), or a source does provide it and Utah deliberately declines to ship it
+# (fish). Entries of the second kind MUST say so in their reason text, so this
+# list is not read as a build backlog. Either way, each entry MUST carry a
+# tracking issue: this list is the documented parity debt plus its deliberate
+# exceptions, not a dumping ground for packages that are merely inconvenient.
 #
 # evolution-ews-core
 #

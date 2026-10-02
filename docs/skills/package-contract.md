@@ -70,23 +70,23 @@ hardware establishes that its radio works.
 
 ## [unavailable] rules
 
-`[unavailable]` means "no repository Utah enables provides this name at all".
-It covers both kinds of parity gap: names in the copied `base.toml` contract,
-and names Bluefin's published image ships from a build file outside that
-contract (recorded in `baselines/bluefin/rpms.tsv` and triaged in
-`baselines/triage.toml` — `nvtop` is the current example). It also covers
-deliberate exclusions: where a source does provide a contract name but Utah
-declines to ship it (fish, which Bluefin classic shipped as part of an every-shell
-set Utah does not repeat). An entry of this kind **MUST say so** — the reason
-text has to state that the package is excluded rather than blocked, so the list
-is not read as a build backlog. Each entry **MUST carry a tracking issue**: the
-list is the documented parity debt, not a dumping ground for packages that are
-merely inconvenient (header comment, `packages/utah.toml`).
+`[unavailable]` covers two cases: names no enabled repository provides
+(contract gaps like evolution-ews-core, ppp, and firefox, as well as image
+gaps like nvtop) and deliberate exclusions where a source does provide the name
+but Utah deliberately declines to ship it (fish, which the factory builds and
+which resolves, but which Bluefin classic shipped as part of an every-shell
+set Utah does not repeat). An entry of the second kind **MUST say so** — the
+reason text has to state that the package is excluded rather than blocked, so
+the list is not read as a build backlog. Either way, each entry **MUST carry a
+tracking issue**: the list is the documented parity debt plus its deliberate
+exceptions, not a dumping ground for packages that are merely inconvenient
+(header comment, `packages/utah.toml`).
 
 Either way, each entry **MUST carry a tracking issue**: the list is the
 documented parity debt plus its deliberate exceptions, not a dumping ground
 for packages that are merely inconvenient (header comment,
 `packages/utah.toml`).
+
 ## multimedia_overrides are not missing packages
 
 Bluefin's `[multimedia_overrides]` (twelve names: mesa-libGL,
@@ -98,9 +98,9 @@ is absent from the image; what differs is which build it carries, and the
 practical consequence is hardware-accelerated codec support.
 
 That is why they are absent from the contract rather than listed under
-`[unavailable]`: recording them as missing would be wrong (a source does
-provide the name), and recording them as satisfied would hide a real
-functional difference. The factory already builds several of them in
+`[unavailable]`: neither case applies. Recording them as missing would be
+wrong (the name is installed; only the build differs), and recording them as
+satisfied would hide a real functional difference. The factory already builds several of them in
 projectbluefin/hummingbird-github; when that overlay is published and enabled
 here, these can move into the contract as a version assertion rather than a
 name one (header comment, `packages/utah.toml`).
