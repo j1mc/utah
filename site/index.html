@@ -76,7 +76,7 @@
     </div>
     <dl class="quickstats reveal" id="quickstats">
       <div><dt>Packages installed</dt><dd data-stat="installed">&mdash;</dd></div>
-      <div><dt>Documented gaps</dt><dd data-stat="unavailable">&mdash;</dd></div>
+      <div><dt>Not shipped</dt><dd data-stat="unavailable">&mdash;</dd></div>
       <div><dt>Image flavors</dt><dd>4</dd></div>
       <div><dt>Desktop</dt><dd>GNOME&nbsp;51</dd></div>
     </dl>
@@ -113,10 +113,14 @@
     <p class="note" id="pkg-empty" hidden>No package matches that search.</p>
 
     <div class="gaps reveal" id="gaps">
-      <h3>Known gaps</h3>
-      <p>Packages Bluefin ships that no repository Utah enables can provide. Each one
-         carries a tracking issue, by rule &mdash; this is the documented debt, not a
-         silent omission.</p>
+      <h3>Not shipped</h3>
+      <p>Packages Bluefin ships that Utah's image does not carry, and it covers two
+         cases. The first is a genuine gap: no repository Utah enables provides the
+         name, whether that is a contract gap or an image one. The second is a
+         deliberate exclusion: a source does provide the name, but Utah declines to
+         ship it &mdash; <code>fish</code>, which the factory builds and which resolves.
+         Either kind carries a tracking issue, by rule &mdash; this is the documented
+         debt plus its deliberate exceptions, not a silent omission.</p>
       <ul class="gap-list" id="gap-list"></ul>
     </div>
   </section>
