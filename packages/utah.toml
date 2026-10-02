@@ -325,10 +325,10 @@ packages = [
 [unavailable]
 # Bluefin parity gaps Utah's image does not carry.  Two kinds of gap land
 # here: no enabled repository provides the name at all (contract or image
-# gaps), or a source does provide it and Utah deliberately declines to ship it
-# (fish). Entries of the second kind MUST say so in their reason text, so this
-# list is not read as a build backlog. Either way, each entry MUST carry a
-# tracking issue: this list is the documented parity debt plus its deliberate
+# gaps), or a source does provide it and Utah deliberately declines to ship it.
+# Entries of the second kind MUST say so in their reason text, so this list is
+# not read as a build backlog. Either way, each entry MUST carry a tracking
+# issue: this list is the documented parity debt plus its deliberate
 # exceptions, not a dumping ground for packages that are merely inconvenient.
 #
 # evolution-ews-core
