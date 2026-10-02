@@ -74,11 +74,19 @@ hardware establishes that its radio works.
 It covers both kinds of parity gap: names in the copied `base.toml` contract,
 and names Bluefin's published image ships from a build file outside that
 contract (recorded in `baselines/bluefin/rpms.tsv` and triaged in
-`baselines/triage.toml` — `nvtop` is the current example). Each entry
-**MUST carry a tracking issue**: the list is the documented parity debt, not
-a dumping ground for packages that are merely inconvenient (header comment,
-`packages/utah.toml`).
+`baselines/triage.toml` — `nvtop` is the current example). It also covers
+deliberate exclusions: where a source does provide a contract name but Utah
+declines to ship it (fish, which Bluefin classic shipped as part of an every-shell
+set Utah does not repeat). An entry of this kind **MUST say so** — the reason
+text has to state that the package is excluded rather than blocked, so the list
+is not read as a build backlog. Each entry **MUST carry a tracking issue**: the
+list is the documented parity debt, not a dumping ground for packages that are
+merely inconvenient (header comment, `packages/utah.toml`).
 
+Either way, each entry **MUST carry a tracking issue**: the list is the
+documented parity debt plus its deliberate exceptions, not a dumping ground
+for packages that are merely inconvenient (header comment,
+`packages/utah.toml`).
 ## multimedia_overrides are not missing packages
 
 Bluefin's `[multimedia_overrides]` (twelve names: mesa-libGL,

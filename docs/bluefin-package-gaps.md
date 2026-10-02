@@ -18,9 +18,11 @@ Status: Final. Accepted by the owner in the grill session of 2026-09-26
 - CUDA out (7.68 GB baked in vs container via toolkit; nvidia-container.repo present).
 - grub2* excluded (boot breakage; returns with utah-packages#238).
 - anaconda-live/slitherer out (factory installer policy, #83).
+- fish out permanently (D3) — the factory builds it and it resolves; Bluefin
+  classic's every-shell set is not repeated. Homebrew covers it (#419).
 
 ### B. Blocked on factory/Hummingbird (tracked) — confirm watch list
-fish, zsh, libgda(-sqlite) (#106), ppp (#107), microcode_ctl, emoji/math default fonts
+zsh, libgda(-sqlite) (#106), ppp (#107), microcode_ctl, emoji/math default fonts
 (utah-packages#147), alsa-utils (#146), cmake (Hummingbird missed rebuild: needs
 libjsoncpp.so.26, repo has .27).
 
