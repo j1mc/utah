@@ -1,7 +1,7 @@
 ---
 name: containerfile
 version: "1.0"
-last_updated: "2026-09-26"
+last_updated: "2026-10-02"
 id: containerfile
 one_line_purpose: Edit the Containerfile without regressing layer count or cache hits.
 entry_point: docs/skills/containerfile.md
@@ -53,9 +53,26 @@ In summary:
   the digest-pinned OCI package repository for reproducible CI builds, while
   allowing local composition to inject a local image from containers-storage
   via `just build-local`.
+- A `PACKAGE_IMAGE_SHA` bump must also move the `# factory-pin:` stamp in
+  `packages/utah-packages.repo`. The transaction reads the `packages` stage
+  through a bind mount, which is not part of the RUN cache key, and the ARG
+  change alone does not bust the layer on CI's buildah -- a pin-only commit
+  rebuilt nothing and shipped the previous factory's packages (#371). The
+  stamp rides a COPY before the transaction, and COPY content always keys the
+  cache. A test fails the build when the two disagree.
 - External executable release assets (such as `uupd`) are pinned by version
   and verified with explicit sha256 checksums (`UUPD_SHA256`) before
   extraction.
+- ChairLift's root-owned helper and ublue policy come from the checksummed
+  release matching the Homebrew cask, currently `26.09.0-alpha.4`. The pinned
+  Common artifact (`360450d6…`) supplies its schemas and bootc staging policy,
+  but not `/usr/bin/chairlift-helper` or `io.projectbluefin.chairlift.ublue.policy`.
+  The build checks every action's `exec.path` against the installed helper;
+  the desktop contract also requires both files. Do not execute privileged
+  host actions to validate a bump: inspect the archive/policy, then use
+  `chairlift-helper restart --dry-run` only inside the disposable candidate.
+  When a future Common pin supplies the helper and policy, remove Utah's
+  download/install together so an older local pin cannot overwrite Common.
 - The digest-pinned `packages` stage is the package factory's RPM repository,
   and it is **bind mounted, never copied**: `RUN --mount=type=bind,
   from=packages,source=/repository,target=/etc/utah-packages,ro` feeds it to the
@@ -125,14 +142,19 @@ pushed once.
 
 ## Adding a script
 
+Hummingbird symlinks `/usr/local` to `../var/usrlocal`, and `clean-stage` drops
+`/var` seed content during composition. Utah image helpers belong in immutable
+`/usr/libexec` so they survive cleanup and remain available at runtime, while
+preserving `/usr/local` for writable host administrator software.
+
 All of Utah's scripts arrive in one COPY, staged under `/tmp/utah-scripts/`
 because a multi-source COPY cannot rename, and installed by name into
-`/usr/local/libexec/` by the rename loop in the same RUN (comment and loop,
+`/usr/libexec/` by the rename loop in the same RUN (comment and loop,
 `Containerfile`). The checklist for a new script:
 
 1. Add the file to the `COPY scripts/... /tmp/utah-scripts/` list.
 2. Add a `source:utah-<name>` pair to the rename loop so it lands at
-   `/usr/local/libexec/utah-<name>` -- every downstream path expects the
+   `/usr/libexec/utah-<name>` -- every downstream path expects the
    `utah-` prefix.
 3. Run `just check`.
 
@@ -166,6 +188,30 @@ last package install, which is the NVIDIA and OGC step, not after the main
 transaction. The lint that checks the result runs in the same layer
 (`bootc container lint --fatal-warnings --skip nonempty-boot`): nothing can
 change between the two (comment, `Containerfile`).
+
+## `just` override and the 1.56 floor
+
+Utah's `00-entry.just` imports Common's renamed entry (`00-common.just`) plus
+its own `60-custom.just` at a shallower depth than Common's own `import?`
+lines reach `60-custom.just`. The override wins on `just` >= 1.56, which
+stopped deduplicating an AST across nested imports of the same file; earlier
+versions deduplicated, Common's deeper import shadowed ours, and every
+override silently reverted to Common's recipe (issue #449). The Containerfile
+preserves the mechanism by renaming Common's `00-entry.just` to
+`00-common.just` before staging Utah's local files, so the shallower override
+is in place by the time the entry point runs.
+
+The shipped image is already past the floor: `baselines/utah/rpms.tsv` records
+`just 1.57.0-1.hum1.bfin` (Bluefin's parity manifest, `baselines/bluefin/rpms.tsv`,
+records `1.57.0-1.fc44`). The `just` package is inherited from Bluefin and its
+version is not pinned here. Two checks keep it that way:
+`tests/test_ujust_overrides.py` asserts the baseline NEVR stays >= 1.56 so an
+image regression below the floor fails the suite, and the same module's
+host-side override tests skip with a message naming issue #449 when the
+developer's own `just` is below the floor. `just` is already listed in
+`packages/bluefin.toml` as part of the mirrored parity manifest -- do not pin
+or override its version there or in `packages/utah.toml`; that contract
+belongs to Bluefin.
 
 ## Verification
 
