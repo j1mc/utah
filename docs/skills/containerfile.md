@@ -282,10 +282,17 @@ fixed `SOURCE_DATE_EPOCH` from the integrated source commit, never clock-now.
 The epoch is an early build argument because RPM transaction content depends
 on it; a new source epoch invalidates those cache keys intentionally.
 
-The comparator still checks every ordered native layer. Timestamp plumbing
-does not establish that generated content such as intermediate transaction
-logs is deterministic; retain any frozen-run diff and fix its producer.
-Do not squash or ignore layers to claim a passing acceptance result.
+The comparator still checks every ordered native layer. The frozen rerun after
+timestamp plumbing matched every layer except the package and desktop RUNs.
+Their remaining differences were exactly dnf5 logs, transaction-history
+SQLite WAL/SHM state, and the regenerated ibus, ldconfig and swcatalog caches.
+Those files are now removed at both producing RUN boundaries, before their
+bytes can reach a native layer; deleting them only in final cleanup leaves
+the earlier blobs nondeterministic. This targeted removal does not sweep
+`/tmp`, the generic-logo RPM or `/utah-cache`, which later stages still need.
+Keep the full ordered-layer comparison; do not squash or ignore layers to
+claim a passing acceptance result. A frozen real two-build pass is still
+required after this repair.
 
 ## `just` override and the 1.56 floor
 

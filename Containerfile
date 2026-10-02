@@ -187,7 +187,15 @@ RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages
       /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml && \
     /usr/local/libexec/utah-fix-home-labels && \
     DNF="$(command -v dnf5 || command -v dnf)" && \
-    "$DNF" clean all && rm -rf /var/cache/libdnf5 /var/cache/dnf
+    "$DNF" clean all && rm -rf /var/cache/libdnf5 /var/cache/dnf && \
+    # These regenerated files contain timestamps or process-local SQLite state.
+    # Remove them in the producing layer, not only from the final merged rootfs.
+    rm -f /usr/lib/sysimage/libdnf5/transaction_history.sqlite \
+          /usr/lib/sysimage/libdnf5/transaction_history.sqlite-shm \
+          /usr/lib/sysimage/libdnf5/transaction_history.sqlite-wal \
+          /var/log/dnf5.log* /var/cache/ibus/bus/registry \
+          /var/cache/ldconfig/aux-cache \
+          /var/cache/swcatalog/cache/C-local-metainfo.xb
 
 # Per-image arguments. Nothing above this line may read them; see the note on
 # layer discipline at the top.
@@ -251,7 +259,15 @@ RUN mkdir -p /tmp/uupd && \
     /usr/local/libexec/utah-configure-branding && \
     /usr/local/libexec/utah-verify-desktop-contract /usr/share/utah/bluefin-desktop.toml && \
     /usr/local/libexec/utah-mirror-shim && \
-    /usr/local/libexec/utah-verify-efi-chain
+    /usr/local/libexec/utah-verify-efi-chain && \
+    # configure-services removes RPMs and regenerates transaction/cache residue.
+    # Keep the desktop layer itself deterministic, without sweeping build inputs.
+    rm -f /usr/lib/sysimage/libdnf5/transaction_history.sqlite \
+          /usr/lib/sysimage/libdnf5/transaction_history.sqlite-shm \
+          /usr/lib/sysimage/libdnf5/transaction_history.sqlite-wal \
+          /var/log/dnf5.log* /var/cache/ibus/bus/registry \
+          /var/cache/ldconfig/aux-cache \
+          /var/cache/swcatalog/cache/C-local-metainfo.xb
 
 # Dakota-compatible flavors: OGC is built and asserted before NVIDIA so the
 # NVIDIA path can bind its module to the exact kernel tree it will boot.
