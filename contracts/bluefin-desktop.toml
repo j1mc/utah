@@ -6,6 +6,14 @@
 [branding]
 files = [
   "/usr/share/ublue-os/bluefin-logos/bluefin.png",
+  "/usr/share/pixmaps/bluefin-gdm-logo.png",
+  # Control Center has compile-time logo paths, independent of os-release.
+  "/usr/share/pixmaps/fedora_logo_med.png",
+  "/usr/share/pixmaps/fedora_whitelogo_med.png",
+  "/usr/share/pixmaps/fedora-logo.png",
+  "/usr/share/pixmaps/system-logo-white.png",
+  "/usr/share/icons/hicolor/scalable/actions/ublue-logo-symbolic.svg",
+  "/usr/share/icons/hicolor/icon-theme.cache",
   "/usr/share/ublue-os/bluefin-logos/chicken.png",
   "/usr/share/ublue-os/bluefin-logos/symbols/bluefin",
   "/usr/share/backgrounds/bluefin/01-bluefin.xml",
@@ -17,9 +25,8 @@ files = [
 
 [branding.os_release]
 NAME = "Utah"
-ID = "utah"
+ID = "hummingbird"
 ID_LIKE = "fedora"
-CPE_NAME = "cpe:/o:universal-blue:utah"
 HOME_URL = "https://projectbluefin.io"
 DOCUMENTATION_URL = "https://docs.projectbluefin.io"
 SUPPORT_URL = "https://github.com/projectbluefin/utah/issues/"
@@ -32,6 +39,10 @@ IMAGE_ID = "utah"
 PRETTY_NAME = '^Utah \(Version: .+\)$'
 VERSION = '^.+ \(Hummingbird\)$'
 VARIANT_ID = '^utah(-.*)?$'
+# ID, VERSION_ID and CPE_NAME are left at the Hummingbird base values so CVE
+# scanners still recognise the image as Hummingbird-based; this pattern asserts
+# the base CPE identity survives rather than pinning a per-release CPE string.
+CPE_NAME = '^cpe:/a:redhat:hummingbird:\d+$'
 OSTREE_VERSION = '^.+$'
 IMAGE_VERSION = '^.+$'
 BUILD_ID = '^.+$'
@@ -54,6 +65,11 @@ files = [
   "/etc/dconf/db/distro.d/03-bluefin-ptyxis-palette",
   "/etc/dconf/db/distro.d/04-bluefin-custom-command-menu",
   "/etc/dconf/db/distro.d/locks/01-bluefin-locked-settings",
+  # GDM greeter logo. GDM uses its own "gdm" dconf profile (provided by the
+  # gdm RPM at /etc/dconf/profile/gdm); without this keyfile gnome-shell
+  # falls back to /usr/share/pixmaps/fedora-gdm-logo.png from fedora-logos,
+  # and the login screen shows the Fedora wordmark instead of Bluefin (#378).
+  "/etc/dconf/db/gdm.d/01-bluefin-gdm-logo",
 ]
 
 [configuration.file_contains]
@@ -64,9 +80,18 @@ files = [
 "/etc/dconf/db/distro.d/04-bluefin-custom-command-menu" = [
   "Bazaar App Store",
   "docs.projectbluefin.io",
+  "menuicon-setting='ublue-logo-symbolic'",
 ]
 "/etc/dconf/db/distro.d/02-bluefin-keybindings" = [
   "xdg-terminal-exec",
+]
+# The login screen logo must point at the Bluefin mark. Asserting both the
+# schema and the asset path guards against reverting to the Fedora fallback
+# or to the full-size bluefin.png, which renders far too large. The path must
+# be the small wordmark that [branding].files asserts is shipped. See #378.
+"/etc/dconf/db/gdm.d/01-bluefin-gdm-logo" = [
+  "[org/gnome/login-screen]",
+  "logo='/usr/share/pixmaps/bluefin-gdm-logo.png'",
 ]
 
 [flatpak]
@@ -142,6 +167,7 @@ enabled = [
   "ModemManager.service",
   "ublue-system-setup.service",
   "uupd.timer",
+  "systemd-boot-update.service",
 ]
 # Per-user services, checked with `systemctl --global is-enabled`. Hummingbird's
 # user preset disables everything but dbus; without these an installed Utah had
