@@ -51,8 +51,8 @@ class CheckDocCountsTests(unittest.TestCase):
             stale_readme = Path(tmp) / "README.md"
             text = (ROOT / "README.md").read_text()
             rewritten, count = re.subn(
-                r"Genuinely unavailable \| \*\*\d+\*\*",
-                "Genuinely unavailable | **4**", text)
+                r"Not shipped \| \*\*\d+\*\*",
+                "Not shipped | **4**", text)
             self.assertEqual(count, 1)
             stale_readme.write_text(rewritten)
 

@@ -68,14 +68,18 @@ than being noticed later.
 | --- | --- |
 | Bluefin contract installed | **61** |
 | Utah additions (GNOME 51, base-image parity, device firmware, desktop services) | 88 |
-| Genuinely unavailable | **7** |
+| Not shipped | **7** |
 
 The install writes its resolved list to `/usr/share/utah/contract.txt` and the
-verify step asserts *that file*, so the two cannot disagree. The unavailable
-row is not limited to the copied contract: it also holds image-level parity
-gaps — names Bluefin's published image ships from a build file outside
-`base.toml`, recorded in `baselines/bluefin/rpms.tsv` and triaged in
-`baselines/triage.toml` (`nvtop` is the current example). These counts are
+verify step asserts *that file*, so the two cannot disagree. The "not shipped"
+row is `packages/utah.toml`'s `[unavailable]` list, and it covers two cases.
+The first is a genuine gap: no enabled repository provides the name. That
+includes image-level parity gaps as well as contract ones — names Bluefin's
+published image ships from a build file outside `base.toml`, recorded in
+`baselines/bluefin/rpms.tsv` and triaged in `baselines/triage.toml` (`nvtop`
+is the current example). The second is a deliberate exclusion: a source does
+provide the name, but Utah declines to ship it (`fish`), and the entry's
+reason text has to say so. Either kind carries a tracking issue. These counts are
 generated from `packages/bluefin.toml` and `packages/utah.toml`
 (`scripts/generate-site-data.py`, `site/data/packages.json`); `just check`
 fails if this table drifts from that output (`scripts/check-doc-counts.py`).

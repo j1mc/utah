@@ -82,11 +82,6 @@ tracking issue**: the list is the documented parity debt plus its deliberate
 exceptions, not a dumping ground for packages that are merely inconvenient
 (header comment, `packages/utah.toml`).
 
-Either way, each entry **MUST carry a tracking issue**: the list is the
-documented parity debt plus its deliberate exceptions, not a dumping ground
-for packages that are merely inconvenient (header comment,
-`packages/utah.toml`).
-
 ## multimedia_overrides are not missing packages
 
 Bluefin's `[multimedia_overrides]` (twelve names: mesa-libGL,
@@ -211,7 +206,8 @@ Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per the README "Package parity" section: 61 Bluefin contract
 packages installed, 88 Utah additions (GNOME 51, base-image parity, device
-firmware, desktop services), 7 genuinely unavailable. `scripts/check-doc-counts.py` (part of
+firmware, desktop services), 7 not shipped (gaps plus deliberate exclusions).
+`scripts/check-doc-counts.py` (part of
 `just check`) recomputes these from the manifests and fails if either
 document drifts from `site/data/packages.json`.
 

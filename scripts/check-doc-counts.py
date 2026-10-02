@@ -4,7 +4,7 @@
 README.md's "Package parity with Bluefin" table and docs/skills/
 package-contract.md's "Current counts" sentence quote the same three numbers
 by hand: how many Bluefin contract packages Utah installs as-is, how many it
-adds or supplies itself, and how many are genuinely unavailable. Those
+adds or supplies itself, and how many it does not ship. Those
 numbers already drifted once -- packages/utah.toml's [unavailable] list grew
 from 4 to 9 entries while both documents kept quoting 4 -- so this recomputes
 them from generate-site-data.py's own build() (the same function that writes
@@ -33,7 +33,7 @@ def load_generator():
 
 
 def expected_counts() -> tuple[int, int, int]:
-    """(Bluefin contract installed, Utah additions, genuinely unavailable)."""
+    """(Bluefin contract installed, Utah additions, not shipped)."""
     data = load_generator().build(ROOT)
     bluefin = next(g for g in data["groups"] if g["id"] == "bluefin")
     bluefin_count = len(bluefin["packages"])
@@ -57,20 +57,20 @@ def main() -> int:
     readme = README.read_text()
     readme_bluefin = find(r"Bluefin contract installed \| \*\*(\d+)\*\*", readme, README)
     readme_additions = find(r"Utah additions \([^)]*\) \| (\d+)", readme, README)
-    readme_unavailable = find(r"Genuinely unavailable \| \*\*(\d+)\*\*", readme, README)
+    readme_unavailable = find(r"Not shipped \| \*\*(\d+)\*\*", readme, README)
 
     skill = re.sub(r"\s+", " ", PACKAGE_CONTRACT_SKILL.read_text())
     skill_bluefin = find(r"(\d+) Bluefin contract packages installed", skill,
                           PACKAGE_CONTRACT_SKILL)
     skill_additions = find(r"(\d+) Utah additions \([^)]*\)", skill, PACKAGE_CONTRACT_SKILL)
-    skill_unavailable = find(r"(\d+) genuinely unavailable", skill, PACKAGE_CONTRACT_SKILL)
+    skill_unavailable = find(r"(\d+) not shipped", skill, PACKAGE_CONTRACT_SKILL)
     found = {
         "README.md Bluefin contract installed": (readme_bluefin, bluefin),
         "README.md Utah additions": (readme_additions, additions),
-        "README.md Genuinely unavailable": (readme_unavailable, unavailable),
+        "README.md Not shipped": (readme_unavailable, unavailable),
         "package-contract.md Bluefin contract installed": (skill_bluefin, bluefin),
         "package-contract.md Utah additions": (skill_additions, additions),
-        "package-contract.md genuinely unavailable": (skill_unavailable, unavailable),
+        "package-contract.md not shipped": (skill_unavailable, unavailable),
     }
 
     stale = {label: (actual, want) for label, (actual, want) in found.items() if actual != want}
@@ -83,7 +83,7 @@ def main() -> int:
         return 1
 
     print(f"documented package counts are current: {bluefin} Bluefin contract, "
-          f"{additions} Utah additions, {unavailable} genuinely unavailable")
+          f"{additions} Utah additions, {unavailable} not shipped")
     return 0
 
 
