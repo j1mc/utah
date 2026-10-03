@@ -75,7 +75,10 @@ the build before expensive compilation or container builds run:
   run is one command) or within the ten lines that follow it, must be code
   rather than comment text, and a bare `--check` never clears on its own --
   `sha256sum --check` clears through `sha256sum`. Flathub descriptor
-  downloads (`flathub.flatpakrepo`, `appstream`) and comment lines are exempt.
+  downloads (`flathub.flatpakrepo`, `appstream`) and comment lines are exempt
+  from the extension heuristic only; `scripts/configure-services.sh` still
+  pins `flathub.flatpakrepo` by sha256, because the descriptor carries the
+  `Url=` and `GPGKey=` every Flatpak on the image is verified against.
   Scanning is per *logical* line: backslash continuations are joined before
   matching, so a `curl` whose URL sits on a continuation line is still inspected
   and is reported at the line the command starts on. Matching raw lines instead

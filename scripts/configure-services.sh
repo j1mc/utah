@@ -89,10 +89,21 @@ enable_unit cups.path
 # Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
 # first boot. Keep this as a .flatpakrepo descriptor so the remote is available
 # to both flatpak-preinstall and brew-setup without baking mutable /var state.
+#
+# The descriptor is pinned like every other download in this build: it carries
+# Url= and GPGKey=, so it is the trust root every Flatpak on the image is
+# verified against, not merely a pointer to one. OSTree's signature check is
+# only as good as the key this file names. Flathub's key has not changed since
+# the repository opened, so a hash bump here means Flathub itself moved and the
+# new descriptor deserves a look before it ships.
+FLATHUB_REPO_SHA256=3371dd250e61d9e1633630073fefda153cd4426f72f4afa0c3373ae2e8fea03a
 install -d -m0755 /etc/flatpak/remotes.d
 curl --fail --retry 3 --silent --show-error \
-    --output /etc/flatpak/remotes.d/flathub.flatpakrepo \
+    --output /tmp/flathub.flatpakrepo \
     https://dl.flathub.org/repo/flathub.flatpakrepo
+echo "${FLATHUB_REPO_SHA256}  /tmp/flathub.flatpakrepo" | sha256sum --check --strict
+install -m0644 /tmp/flathub.flatpakrepo /etc/flatpak/remotes.d/flathub.flatpakrepo
+rm -f /tmp/flathub.flatpakrepo
 
 disable_unit flatpak-add-fedora-repos.service
 
