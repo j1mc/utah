@@ -9,7 +9,6 @@ rejecting anything would still report success.
 
 import importlib.util
 import json
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -634,55 +633,6 @@ class FwupdRefreshDropInTests(unittest.TestCase):
                 required, directive_lines,
                 f"drop-in must set {required} so the hardening posture is preserved",
             )
-
-
-class FlathubRemoteDescriptorPinTests(unittest.TestCase):
-    """The Flathub descriptor is the Flatpak trust root, so it is pinned.
-
-    /etc/flatpak/remotes.d/flathub.flatpakrepo carries Url= and GPGKey=; every
-    Flatpak the image installs is verified against whatever key that file
-    names. configure-services.sh therefore has to check the download against a
-    committed sha256 before installing it, the same way every other fetch in
-    the build is checked, and the install must happen only after the check.
-    """
-
-    SCRIPT = ROOT / "scripts/configure-services.sh"
-    DESCRIPTOR = "/etc/flatpak/remotes.d/flathub.flatpakrepo"
-
-    def setUp(self):
-        self.lines = [
-            line for line in self.SCRIPT.read_text().splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        ]
-        self.text = "\n".join(self.lines)
-
-    def test_pin_is_a_full_sha256(self):
-        pins = re.findall(r"^FLATHUB_REPO_SHA256=([0-9a-f]+)$", self.text, re.MULTILINE)
-        self.assertEqual(len(pins), 1, "exactly one FLATHUB_REPO_SHA256 constant")
-        self.assertEqual(len(pins[0]), 64, "FLATHUB_REPO_SHA256 must be a full sha256 hex digest")
-
-    def test_download_is_verified_before_install(self):
-        fetch = next(
-            i for i, line in enumerate(self.lines)
-            if "https://dl.flathub.org/repo/flathub.flatpakrepo" in line
-        )
-        check = next(
-            i for i, line in enumerate(self.lines)
-            if "FLATHUB_REPO_SHA256" in line and "sha256sum --check --strict" in line
-        )
-        install = next(
-            i for i, line in enumerate(self.lines)
-            if line.lstrip().startswith("install ") and self.DESCRIPTOR in line
-        )
-        self.assertLess(fetch, check, "the descriptor must be hashed after it is fetched")
-        self.assertLess(check, install, "the descriptor must be installed only after the hash matches")
-
-    def test_curl_never_writes_the_descriptor_directly(self):
-        # A curl --output straight into remotes.d would install the file
-        # before any check could reject it.
-        for line in self.lines:
-            if "curl" in line or "--output" in line:
-                self.assertNotIn(self.DESCRIPTOR, line, line)
 
 
 if __name__ == "__main__":

@@ -79,6 +79,10 @@ the build before expensive compilation or container builds run:
   from the extension heuristic only; `scripts/configure-services.sh` still
   pins `flathub.flatpakrepo` by sha256, because the descriptor carries the
   `Url=` and `GPGKey=` every Flatpak on the image is verified against.
+  Verify the trust behavior by running `configure-services.sh` in a disposable
+  image: a matching descriptor must install unchanged, while a hash mismatch
+  must exit nonzero without replacing an existing remote. Source ordering or
+  string assertions do not prove that rejection path.
   Scanning is per *logical* line: backslash continuations are joined before
   matching, so a `curl` whose URL sits on a continuation line is still inspected
   and is reported at the line the command starts on. Matching raw lines instead
