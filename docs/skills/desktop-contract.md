@@ -77,12 +77,13 @@ The TOML's sections are the contract's table of contents:
   symlinks that bypass uupd staging or undo manual rollbacks. Switchers can
   also manually verify or mask them if a local `/etc` symlink was preserved.
 
-The common-image bump to `631b7e7` removes Warehouse and smile from Bluefin's
-default Brewfile. Utah follows that upstream default set; the ordered app
-contract changes with the pinned artifact rather than overriding its Brewfile.
-The verifier still compares the actual inherited Brewfile. This source change
-does not introduce an uninstall for existing user-installed applications.
-
+The common image pinned in `Containerfile` (`COMMON_IMAGE_SHA`,
+currently `sha256:0c7ac94…`, which carries upstream `common@6cb73ce`) removes
+Warehouse and smile from Bluefin's default Brewfile. Utah follows that upstream
+default set; the ordered app contract changes with the pinned artifact rather
+than overriding its Brewfile. The verifier still compares the actual inherited
+Brewfile. This source change does not introduce an uninstall for existing
+user-installed applications.
 
 ## Tolerating a non-zero exit in a unit file
 
