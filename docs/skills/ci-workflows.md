@@ -83,6 +83,9 @@ the build before expensive compilation or container builds run:
   image: a matching descriptor must install unchanged, while a hash mismatch
   must exit nonzero without replacing an existing remote. Source ordering or
   string assertions do not prove that rejection path.
+  `tests/test_flathub_descriptor.py` runs the whole script against scratch
+  filesystem roots and a committed descriptor fixture, with real hashing and
+  installation. It covers matching bytes and rejection without remote replacement.
   Scanning is per *logical* line: backslash continuations are joined before
   matching, so a `curl` whose URL sits on a continuation line is still inspected
   and is reported at the line the command starts on. Matching raw lines instead
