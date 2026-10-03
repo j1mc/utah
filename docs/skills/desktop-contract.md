@@ -205,14 +205,25 @@ restores those four files after the RPM transaction, without adding a COPY
 layer or changing the scanner-facing OS identity.
 
 The pinned command-menu extension creates `St.Icon` from `menuicon-setting`.
-Keep Bluefin's `ublue-logo-symbolic` and every command/order/location unchanged;
-position keys and absolute Flatpak commands do not repair an icon. The contract
-requires the SVG and the compiled hicolor cache, which branding regenerates
+Keep Bluefin's `ublue-logo-symbolic`, command labels/order/location and help
+URLs unchanged; position keys and absolute Flatpak commands do not repair an
+icon. Documentation and Ask Bluefin use native `gio open`: the actual Utah
+guest has GLib's launcher but no `xdg-open`, so the inherited help commands
+could not start a browser. The optional host console opener is a separate
+host-side use and remains unchanged.
+The contract requires the SVG and the compiled hicolor cache, which branding regenerates
 after all overlays and package operations. Files alone are not visual proof:
 boot the candidate, inspect icon-theme lookup, and use Ponytail on its GNOME
 session to capture the panel menu plus About in light and dark mode. The menu
 must show the mark (not a placeholder), retain all commands, open Documentation
 at `docs.projectbluefin.io`, and show Bluefin artwork with the Utah OS name.
+
+The bundled symbolic glyph is the Universal Blue U mark. Verify it against
+the shipped SVG rather than treating that artwork as a missing-icon box.
+In the candidate GNOME session, Ponytail's Commands → About action renders
+the Bluefin light/dark artwork and Utah identity; GTK accessibility may omit
+that window, so retain the actual rendered frame as evidence as well.
+
 
 
 ## Services and login defaults
