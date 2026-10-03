@@ -209,8 +209,14 @@ Keep Bluefin's `ublue-logo-symbolic`, command labels/order/location and help
 URLs unchanged; position keys and absolute Flatpak commands do not repair an
 icon. Documentation and Ask Bluefin use native `gio open`: the actual Utah
 guest has GLib's launcher but no `xdg-open`, so the inherited help commands
-could not start a browser. The optional host console opener is a separate
-host-side use and remains unchanged.
+could not start a browser. The evidence is the captured guest surface, not the
+build transaction: `baselines/utah/rpms.tsv` contains no `xdg-utils` (only
+`xdg-desktop-portal*`, `xdg-terminal-exec`, `xdg-user-dirs`) and
+`baselines/utah/surface.tsv` lists no `/usr/bin/xdg-open`, while
+`baselines/GAP.md` tracks `xdg-utils` as still `planned` for Utah (#263).
+`glib2 2.89.3-1.hum1` does ship `/usr/bin/gio`, so `gio open` resolves on the
+guest today and stays correct if `xdg-utils` later lands. The optional host
+console opener is a separate host-side use and remains unchanged.
 The contract requires the SVG and the compiled hicolor cache, which branding regenerates
 after all overlays and package operations. Files alone are not visual proof:
 boot the candidate, inspect icon-theme lookup, and use Ponytail on its GNOME
