@@ -77,18 +77,19 @@ The TOML's sections are the contract's table of contents:
   symlinks that bypass uupd staging or undo manual rollbacks. Switchers can
   also manually verify or mask them if a local `/etc` symlink was preserved.
 
-The common-image bump to `0c7ac94` removes Warehouse and smile from Bluefin's
-default Brewfile. Utah follows that upstream default set; the ordered app
-contract changes with the pinned artifact rather than overriding its Brewfile.
-The verifier still compares the actual inherited Brewfile. This source change
-does not introduce an uninstall for existing user-installed applications.
+The common image pinned in `Containerfile` (`COMMON_IMAGE_SHA`) carries
+upstream `common@6cb73ce` (`projectbluefin/common#1284`), which removed
+Warehouse and smile from Bluefin's default Brewfile. Utah follows that upstream
+default set; the ordered app contract changes with the pinned artifact rather
+than overriding its Brewfile. Read the live pin from `Containerfile` — Renovate
+rewrites it there, so no digest is repeated in this document. The verifier
+still compares the actual inherited Brewfile. This source change does not
+introduce an uninstall for existing user-installed applications.
 
 The same pinned Common artifact owns ChairLift's alpha.4 helper and ublue
 policy. Their payload matches the release and requires administrator
 authentication for all nine actions. The image contract requires both files;
 Utah does not layer a duplicate release install over Common's copy.
-
-
 
 ## Tolerating a non-zero exit in a unit file
 
