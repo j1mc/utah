@@ -46,17 +46,19 @@ if ! selinuxenabled >/dev/null 2>&1; then
     exit 0
 fi
 
-version-script-check boot-log-label privileged 1 || exit 0
-
-set -xeuo pipefail
-
 # /var/log/boot.log may not exist yet on a fresh install -- plymouth creates
 # it during boot. There is nothing to relabel, so exit without committing and
-# retry once the file appears.
+# retry once the file appears. Like the SELinux guard, this transient skip
+# must sit before the version check so the compat shim's legacy stamp does
+# not record it as done.
 if [[ ! -e /var/log/boot.log ]]; then
     echo "boot-log-label: /var/log/boot.log absent; skipping"
     exit 0
 fi
+
+version-script-check boot-log-label privileged 1 || exit 0
+
+set -xeuo pipefail
 
 # Repair the label from the policy's own file contexts: /var/log/boot.log.*
 # maps to plymouthd_var_log_t, which plymouthd_t may append to.

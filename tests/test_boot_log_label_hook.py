@@ -62,10 +62,15 @@ class BootLogLabelHookContractTests(unittest.TestCase):
 
     def test_absent_log_file_skips_without_committing(self):
         # On a fresh install plymouth has not created the log yet; stamping
-        # then would skip the repair forever.
-        self.assertIn("if [[ ! -e /var/log/boot.log ]]; then", self.lines)
+        # then would skip the repair forever. Like the SELinux guard, it must
+        # precede the version check, which is the legacy stamp under the shim.
+        guard = "if [[ ! -e /var/log/boot.log ]]; then"
+        check = "version-script-check boot-log-label privileged 1 || exit 0"
+        self.assertIn(guard, self.lines)
+        self.assertIn(check, self.lines)
+        self.assertLess(self.lines.index(guard), self.lines.index(check))
         self.assertLess(
-            self.lines.index("if [[ ! -e /var/log/boot.log ]]; then"),
+            self.lines.index(guard),
             self.lines.index("restorecon -F /var/log/boot.log"),
         )
 
