@@ -27,6 +27,14 @@ Hooks live in two directories:
 - `system_files/shared/usr/share/ublue-os/privileged-setup.hooks.d/` — runs via
   pkexec as root, when a privileged action is needed.
 
+`user-setup.hooks.d/99-privileged.sh` is the bridge between the two: it
+escalates to `ublue-privileged-setup` on every user login. It skips the
+GDM greeter session (`gdm-greeter`, #688) outright — that transient
+account's SHELL is not listed in `/etc/shells`, so pkexec logs an error
+for it, and privileged hooks stamp once-only completion system-wide
+anyway, so the greeter has nothing to do. The first real login runs
+them.
+
 Every hook sources `/usr/lib/ublue/setup-services/libsetup.sh` (shipped by
 `projectbluefin/common` through the pinned `COMMON_IMAGE_SHA`).
 
