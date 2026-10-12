@@ -1,7 +1,7 @@
 ---
 name: setup-hooks
 version: "1.0"
-last_updated: "2026-10-12"
+last_updated: "2026-10-03"
 id: setup-hooks
 one_line_purpose: Change a first-boot setup hook without breaking the once-only contract.
 entry_point: docs/skills/setup-hooks.md
