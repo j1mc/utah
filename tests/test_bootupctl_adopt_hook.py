@@ -103,6 +103,21 @@ class BootupctlAdoptHookContractTests(unittest.TestCase):
         cause the hook to be skipped forever after common#1196."""
         self.assertIn("command -v bootupctl", self.body)
 
+    def test_transient_skips_precede_the_check(self):
+        # Under the pre-1196 compat shim version-script-check *is* the legacy
+        # stamp, so a transient skip placed after it is recorded as done and
+        # never retries (same rule as 10-tailscale.sh and setup-hooks.md).
+        self.assertLess(
+            self.body.index("command -v bootupctl"), self.body.index(
+                "version-script-check bootupctl-adopt privileged 1 || exit 0"
+            )
+        )
+        self.assertLess(
+            self.body.index("findmnt -n -o FSTYPE /sysroot"), self.body.index(
+                "version-script-check bootupctl-adopt privileged 1 || exit 0"
+            )
+        )
+
     def test_compat_shim_covers_pre_1196_libsetup(self):
         # The pinned COMMON_IMAGE_SHA has no version-script-check/-commit yet,
         # so the shim keeps the hook working under both contracts in either
@@ -244,6 +259,22 @@ class BootupctlAdoptHookBehaviourTests(unittest.TestCase):
             (self.fake / "state" / "bootupctl_args").exists()
         )
 
+    def run_hook_legacy(self):
+        """Run the hook against a pre-1196 libsetup that only has the legacy
+        stamping version-script, so the hook's compat shim is what runs."""
+        legacy = (
+            "#!/usr/bin/env bash\n"
+            'version-script() {\n'
+            '  local key="$1" scope="$2" version="$3"\n'
+            '  local marker="${HOOK_STATE_DIR}/${scope}-${key}-${version}"\n'
+            '  [[ -e "${marker}" ]] && return 1\n'
+            '  mkdir -p "${HOOK_STATE_DIR}"\n'
+            '  : > "${marker}"\n'
+            '}\n'
+        )
+        (self.fake / "libexec" / "libsetup.sh").write_text(legacy)
+        return self.run_hook()
+
     def test_missing_bootupctl_skips_without_committing(self):
         # Remove the bootupctl stub to simulate an image variant that does
         # not carry it. The hook must exit cleanly and not commit, so a later
@@ -256,6 +287,34 @@ class BootupctlAdoptHookBehaviourTests(unittest.TestCase):
         )
         self.assertFalse(
             (self.fake / "state" / "privileged-bootupctl-adopt-1").exists()
+        )
+
+    def test_legacy_missing_bootupctl_skips_without_stamping(self):
+        # Same skip under a pre-1196 libsetup: the shim's check is the legacy
+        # stamp, so reaching it before the guard would burn the stamp and the
+        # hook would never retry after a later switch brings bootupctl in.
+        (self.fake / "bin" / "bootupctl").unlink()
+        r = self.run_hook_legacy()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(
+            (self.fake / "state" / "bootupctl_args").exists()
+        )
+        self.assertFalse(
+            (self.fake / "state" / "privileged-bootupctl-adopt-1").exists(),
+            "transient skip under the legacy shim must not stamp",
+        )
+
+    def test_legacy_live_session_skips_without_stamping(self):
+        self.env["HOOK_ROOT_FSTYPE"] = "squashfs"
+        r = self.run_hook_legacy()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(
+            (self.fake / "state" / "bootupctl_args").exists(),
+            "live session must not call bootupctl",
+        )
+        self.assertFalse(
+            (self.fake / "state" / "privileged-bootupctl-adopt-1").exists(),
+            "transient skip under the legacy shim must not stamp",
         )
 
     def test_failing_bootupctl_aborts_before_commit(self):

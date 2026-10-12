@@ -32,14 +32,16 @@ if ! declare -F version-script-check >/dev/null; then
     version-script-commit() { :; }
 fi
 
-version-script-check bootupctl-adopt privileged 1 || exit 0
-
 set -xeuo pipefail
 
+# Transient guards run before version-script-check: under the pre-1196 compat
+# shim above the check is the legacy stamp, so a skip placed after it would
+# be recorded as done and never retry. An exit without commit causes a retry
+# next boot, which is the intended contract from common#1196 for transient
+# skips.
+
 # Skip cleanly when bootupctl is not installed (e.g. an image variant that
-# does not carry it). An exit without commit causes a retry next boot, which
-# is the intended contract from common#1196 for transient skips -- bootupctl
-# may be present after a later bootc switch.
+# does not carry it). Bootupctl may be present after a later bootc switch.
 if ! command -v bootupctl >/dev/null 2>&1; then
     echo "bootupctl-adopt: bootupctl not installed; skipping"
     exit 0
@@ -53,6 +55,8 @@ if findmnt -n -o FSTYPE /sysroot 2>/dev/null | grep -Eq '^(erofs|squashfs)$'; th
     echo "bootupctl-adopt: live session root; skipping"
     exit 0
 fi
+
+version-script-check bootupctl-adopt privileged 1 || exit 0
 
 # Adopt the on-disk bootloader and write /boot/bootupd-state.json. On a
 # system already adopted the command is a no-op; failures (no EFI dir,
