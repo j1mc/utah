@@ -96,6 +96,7 @@ use.
 | Hook | Purpose |
 |------|---------|
 | `05-bootupctl-adopt.sh` | Run `bootupctl adopt-and-update` on first boot so a switched-into-Utah system sees its on-disk shim and GRUB as managed by `bootupd`. Skips live sessions (`/sysroot` on `erofs`/`squashfs`) and image variants without `bootupctl` installed, both without committing so a later switch retries. Tracked by #363. |
+| `06-boot-log-label.sh` | `restorecon` `/var/log/boot.log` to the policy's `plymouthd_var_log_t` so `plymouthd` can append to it, verifying the on-disk label before committing (#689). SELinux-disabled and log-absent boots skip without stamping so a later boot retries. |
 | `10-tailscale.sh` | Set a non-root pkexec caller as the Tailscale operator. Missing Tailscale or an invalid/root caller defers without stamping; a failed grant retries with the read-only API. |
 | `11-framework-ucsi-workaround.sh` | Append the `usbcore.autosuspend=-1` karg on Intel-Core-Ultra Frameworks. Wrong hardware or an already-applied karg commits a deliberate skip; missing DMI or rpm-ostree retries. |
 | `20-home-labels.sh` | Relabel `/var/home` once on systems installed before #261, repairing a mis-keyed active `file_contexts.homedirs` first (#474). |
@@ -138,3 +139,7 @@ against both library contracts using scratch filesystem roots. It proves
 successful bodies run once, body failures retry with the new pair, Framework
 deliberate skips stamp and transient skips recover. It uses real Firefox copy
 operations against scratch destinations, never host `/var/lib/flatpak`.
+`tests/test_boot_log_label_hook.py` asserts the contract statically on
+`06-boot-log-label.sh` (#689): host-side tests cannot exercise restorecon or
+SELinux labels, so it checks skip/check/body/commit ordering, the
+`plymouthd_var_log_t` verification before the commit, and the compat shim.
